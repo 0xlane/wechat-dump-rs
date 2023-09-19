@@ -1,0 +1,27 @@
+[package]
+name = "wechat-dump-rs"
+version = "0.1.0"
+edition = "2023"
+author = "REinject"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
+codegen-units = 1
+
+[dependencies]
+aes = "0.8.3"
+anyhow = "1.0.75"
+cbc = "0.1.2"
+clap = "4.4.3"
+hex = "0.4.3"
+hmac = "0.12.1"
+pbkdf2 = { version = "0.12.2", features = ["sha1"] }
+regex = "1.9.5"
+sha1 = "0.10.5"
+tasklist = "0.2.12"
+windows = { version = "0.51.1", features = ["implement", "Win32_Security", "Win32_System_WindowsProgramming", "Win32_System_Com", "Win32_System_Memory", "Win32_System_Threading", "Win32_Foundation", "Win32_System_ProcessStatus", "Win32_System_Diagnostics_Debug"] }
+yara = { version = "0.21.0", features = ["yara-static", "vendored"] }
