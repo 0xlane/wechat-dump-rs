@@ -236,6 +236,9 @@ fn dump_wechat_info(pid: u32) -> WechatInfo {
     let data_dir =
         String::from_utf8(data_dir_match.data.clone()).expect("data dir is invalid string");
 
+    println!("[+] login phone type is {}", phone_type_string);
+    println!("[+] wechat data dir is {}", data_dir);
+
     // account_name 在 phone_type 前面，并且是 16 位补齐的，所以向前找，离得比较近不用找太远的
     let mut account_name_addr = phone_type_string_addr - 16;
     let mut account_name: Option<String> = None;
@@ -274,6 +277,7 @@ fn dump_wechat_info(pid: u32) -> WechatInfo {
         panic!("not found account name address");
     }
     let account_name = account_name.unwrap();
+    println!("[+] account name is {}", account_name);
 
     // 读取一个文件准备暴力搜索key
     const IV_SIZE: usize = 16;
@@ -283,7 +287,7 @@ fn dump_wechat_info(pid: u32) -> WechatInfo {
     const SALT_SIZE: usize = 16;
     const PAGE_SIZE: usize = 4096;
     let db_file_path = data_dir.clone() + "\\Msg\\Misc.db";
-    let mut db_file = std::fs::File::open(db_file_path).expect("Misc.db is not exsit");
+    let mut db_file = std::fs::File::open(&db_file_path).expect(format!("{} is not exsit", &db_file_path).as_str());
     let mut buf = [0u8; PAGE_SIZE];
     db_file.read(&mut buf[..]).expect("read Misc.db is failed");
     
