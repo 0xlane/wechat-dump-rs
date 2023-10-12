@@ -39,7 +39,7 @@ const RULES: &str = r#"
     rule GetDataDir
     {
         strings:
-            $a = /[a-zA-Z]:\\Users\\.{0,50}\\Documents\\WeChat Files\\wxid_[0-9a-zA-Z]{14}/
+            $a = /[a-zA-Z]:\\Users\\.{0,50}\\Documents\\WeChat Files\\[0-9a-zA-Z_-]{6,20}/
         
         condition:
             $a
