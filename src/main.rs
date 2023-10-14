@@ -513,7 +513,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0")
+        .version("1.0.1")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
@@ -536,7 +536,7 @@ fn main() {
     let all = matches.get_flag("all");
     let output = match matches.get_one::<PathBuf>("output") {
         Some(o) => PathBuf::from(o),
-        None => PathBuf::from(format!("{}\\{}", std::env::temp_dir().to_str().unwrap(), "wechat_dump"))
+        None => PathBuf::from(format!("{}{}", std::env::temp_dir().to_str().unwrap(), "wechat_dump"))
     };
 
     let key_option = matches.get_one::<String>("key");
