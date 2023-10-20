@@ -240,19 +240,20 @@ fn dump_wechat_info(pid: u32) -> WechatInfo {
     println!("[+] wechat data dir is {}", data_dir);
 
     // account_name 在 phone_type 前面，并且是 16 位补齐的，所以向前找，离得比较近不用找太远的
-    let mut account_name_addr = phone_type_string_addr - 16;
+    let mut start = phone_type_string_addr - 16;
+    let mut account_name_addr = start;
     let mut account_name: Option<String> = None;
     let mut count = 0;
-    while account_name_addr >= phone_type_string_addr - 16 * 20 {
+    while start >= phone_type_string_addr - 16 * 20 {
         // 名字长度>=16，就会变成指针，不直接存放字符串
-        let account_name_point_address = read_number::<usize>(pid, account_name_addr)
+        let account_name_point_address = read_number::<usize>(pid, start)
         .expect("read account name point address failed");
         let result = if pmis.iter().any(|x| {
             account_name_point_address >= x.base && account_name_point_address <= x.base + x.region_size
         }) {
             read_string(pid, account_name_point_address, 100)
         } else {
-            read_string(pid, account_name_addr, 16)
+            read_string(pid, start, 16)
         };
 
         if result.is_ok() {
@@ -263,6 +264,7 @@ fn dump_wechat_info(pid: u32) -> WechatInfo {
             if re.is_match(&ac) && ac.len() >= 6 && ac.len() <= 20{
                 // 首次命中可能是原始的 wxid_，第二次是修改后的微信号，找不到第二次说明注册后没改过微信号
                 account_name = Some(ac);
+                account_name_addr = start;
                 count += 1;
                 if count == 2 {
                     break;
@@ -270,7 +272,7 @@ fn dump_wechat_info(pid: u32) -> WechatInfo {
             }
         }
 
-        account_name_addr -= 16;
+        start -= 16;
     }
     
     if account_name.is_none() {
