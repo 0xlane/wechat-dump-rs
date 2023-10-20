@@ -1,4 +1,4 @@
-use windows::Win32::{System::{Memory::{MEMORY_BASIC_INFORMATION, PAGE_PROTECTION_FLAGS, PAGE_TYPE, VIRTUAL_ALLOCATION_TYPE, VirtualQueryEx, MEM_MAPPED, MEM_IMAGE}, Threading::{OpenProcess, PROCESS_VM_READ, PROCESS_QUERY_INFORMATION}, ProcessStatus::GetMappedFileNameA}, Foundation::CloseHandle};
+use windows::Win32::{System::{Memory::{MEMORY_BASIC_INFORMATION, PAGE_PROTECTION_FLAGS, PAGE_TYPE, VIRTUAL_ALLOCATION_TYPE, VirtualQueryEx, MEM_MAPPED, MEM_IMAGE}, Threading::{OpenProcess, PROCESS_VM_READ, PROCESS_QUERY_INFORMATION}, ProcessStatus::GetMappedFileNameW}, Foundation::CloseHandle};
 
 #[derive(Clone, Debug)]
 pub struct ProcessMemoryInfo{
@@ -37,12 +37,10 @@ pub fn get_mem_list(pid: u32) -> Vec<ProcessMemoryInfo> {
             let mut pmi = ProcessMemoryInfo::from(mbi);
 
             if mbi.Type == MEM_IMAGE || mbi.Type == MEM_MAPPED {
-                let mut file_name = [0u8; 512];
-                let file_name_len = GetMappedFileNameA(hprocess, mbi.BaseAddress, file_name.as_mut()) as usize;
+                let mut file_name = [0u16; 512];
+                let file_name_len = GetMappedFileNameW(hprocess, mbi.BaseAddress, file_name.as_mut()) as usize;
                 if file_name_len > 0 {
-                    let mut file_name_str = String::new();
-                    file_name_str.push_str(std::str::from_utf8(&file_name[0 .. file_name_len]).unwrap());
-                    pmi.filename = Some(file_name_str);
+                    pmi.filename = Some(String::from_utf16(&file_name[0 .. file_name_len]).unwrap());
                 }
             }
 
