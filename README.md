@@ -5,16 +5,15 @@
 ## 工具用法
 
 ```bash
-wechat-dump-rs (1.0) - REinject
+wechat-dump-rs (1.0.3) - REinject
 A wechat db dump tool
 Options:
-  -p, --pid <PID>      pid of wechat
-  -k, --key <KEY>      key for offline decryption of db file
-  -f, --file <PATH>    special a db file path
-  -d, --dir <PATH>     special a db dir path
-  -o, --output <PATH>  decrypted database output path
-  -a, --all            dump key and decrypt db files
-  -h, --help           Print help
+  -p, --pid <PID>        pid of wechat
+  -k, --key <KEY>        key for offline decryption of db file
+  -f, --file <PATH>      special a db file path
+  -d, --data-dir <PATH>  special wechat data dir path (pid is required)
+  -o, --output <PATH>    decrypted database output path
+  -h, --help             Print help
 ```
 
 如果不带任何参数，程序只输出所有微信进程的 key、微信号、登录设备、数据目录、版本等信息：

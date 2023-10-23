@@ -39,7 +39,7 @@ const RULES: &str = r#"
     rule GetDataDir
     {
         strings:
-            $a = /[a-zA-Z]:\\Users\\.{0,50}\\Documents\\WeChat Files\\[0-9a-zA-Z_-]{6,20}/
+            $a = /[a-zA-Z]:\\.{0,100}\\WeChat Files\\[0-9a-zA-Z_-]{6,20}/
         
         condition:
             $a
@@ -149,7 +149,7 @@ fn get_proc_file_version(pid: u32) -> String {
     }
 }
 
-fn dump_wechat_info(pid: u32) -> WechatInfo {
+fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInfo {
     let version = get_proc_file_version(pid);
     println!("[+] wechat version is {}", version);
 
@@ -219,22 +219,27 @@ fn dump_wechat_info(pid: u32) -> WechatInfo {
         })
         .next()
         .expect("unable to find phone type string");
-    let data_dir_match = results
-        .iter()
-        .filter(|x| x.identifier == "GetDataDir")
-        .next()
-        .expect("unable to find data dir")
-        .strings
-        .first()
-        .expect("unable to find data dir")
-        .matches
-        .first()
-        .expect("unable to find data dir");
     let phone_type_string_addr = phone_type_str_match.base + phone_type_str_match.offset;
     let phone_type_string =
         read_string(pid, phone_type_string_addr, 20).expect("read phone type string failed");
-    let data_dir =
-        String::from_utf8(data_dir_match.data.clone()).expect("data dir is invalid string");
+    let data_dir = if special_data_dir.is_some() {
+        special_data_dir.unwrap().clone().into_os_string().into_string().unwrap()
+    } else {
+        let data_dir_match = results
+            .iter()
+            .filter(|x| x.identifier == "GetDataDir")
+            .next()
+            .expect("unable to find data dir")
+            .strings
+            .first()
+            .expect("unable to find data dir")
+            .matches
+            .iter()
+            .filter(|x| wechat_writeable_private_mem_infos.iter().any(|pmi| pmi.base == x.base))
+            .next()
+            .expect("unable to find data dir");
+        String::from_utf8(data_dir_match.data.clone()).expect("data dir is invalid string")
+    };
 
     println!("[+] login phone type is {}", phone_type_string);
     println!("[+] wechat data dir is {}", data_dir);
@@ -515,7 +520,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.2")
+        .version("1.0.3")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
@@ -526,7 +531,7 @@ fn cli() -> clap::Command {
                 .value_parser(value_parser!(String)),
         )
         .arg(arg!(-f --file <PATH> "special a db file path").value_parser(value_parser!(PathBuf)))
-        .arg(arg!(-d --dir <PATH> "special a db dir path").value_parser(value_parser!(String)))
+        .arg(arg!(-d --"data-dir" <PATH> "special wechat data dir path (pid is required)").value_parser(value_parser!(PathBuf)))
         .arg(arg!(-o --output <PATH> "decrypted database output path").value_parser(value_parser!(PathBuf)))
         .arg(arg!(-a --all "dump key and decrypt db files"))
 }
@@ -543,12 +548,13 @@ fn main() {
 
     let key_option = matches.get_one::<String>("key");
     let file_option = matches.get_one::<PathBuf>("file");
+    let data_dir_option = matches.get_one::<PathBuf>("data-dir");
     let pid_option = matches.get_one::<u32>("pid");
 
     match (pid_option, key_option, file_option) {
         (None, None, None) => {
             for pid in get_pid_by_name("WeChat.exe") {
-                let wechat_info = dump_wechat_info(pid);
+                let wechat_info = dump_wechat_info(pid, None);
                 println!("{}", wechat_info);
                 println!();
 
@@ -559,7 +565,7 @@ fn main() {
             }
         },
         (Some(&pid), None, None) => {
-            let wechat_info = dump_wechat_info(pid);
+            let wechat_info = dump_wechat_info(pid, data_dir_option);
             println!("{}", wechat_info);
             println!();
 
