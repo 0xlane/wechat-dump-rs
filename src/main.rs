@@ -7,6 +7,7 @@ use std::{
     path::PathBuf,
 };
 
+use rayon::prelude::*;
 use aes::cipher::{KeyIvInit, BlockDecryptMut, block_padding::NoPadding};
 use anyhow::{Ok, Result};
 use hmac::{Hmac, Mac};
@@ -497,7 +498,7 @@ fn dump_all_by_pid(wechat_info: &WechatInfo, output: &PathBuf) {
         std::fs::create_dir_all(&output_dir).unwrap();
     }
 
-    for dbfile in dbfiles {
+    dbfiles.par_iter().for_each(|dbfile| {
         let mut db_file_dir = PathBuf::new();
         let mut dest = PathBuf::new();
         db_file_dir.push(&output_dir);
@@ -510,7 +511,7 @@ fn dump_all_by_pid(wechat_info: &WechatInfo, output: &PathBuf) {
         }
 
         std::fs::write(dest, decrypt_db_file(&dbfile, &wechat_info.key).unwrap()).unwrap();
-    }
+    });
     println!("decryption complete!!");
     println!("output to {}", output_dir.to_str().unwrap());
     println!();
