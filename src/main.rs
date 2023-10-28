@@ -245,12 +245,14 @@ fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInf
     println!("[+] login phone type is {}", phone_type_string);
     println!("[+] wechat data dir is {}", data_dir);
 
+    let align = std::mem::size_of::<usize>();   // x64 -> 16, x86 -> 8
+
     // account_name 在 phone_type 前面，并且是 16 位补齐的，所以向前找，离得比较近不用找太远的
-    let mut start = phone_type_string_addr - 16;
+    let mut start = phone_type_string_addr - align;
     let mut account_name_addr = start;
     let mut account_name: Option<String> = None;
     let mut count = 0;
-    while start >= phone_type_string_addr - 16 * 20 {
+    while start >= phone_type_string_addr - align * 20 {
         // 名字长度>=16，就会变成指针，不直接存放字符串
         let account_name_point_address = read_number::<usize>(pid, start)
         .expect("read account name point address failed");
@@ -259,7 +261,7 @@ fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInf
         }) {
             read_string(pid, account_name_point_address, 100)
         } else {
-            read_string(pid, start, 16)
+            read_string(pid, start, align)
         };
 
         if result.is_ok() {
@@ -278,7 +280,7 @@ fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInf
             }
         }
 
-        start -= 16;
+        start -= align;
     }
     
     if account_name.is_none() {
@@ -302,7 +304,7 @@ fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInf
     // key 在微信号前面找
     let mut key: Option<String> = None;
     let mem_base = phone_type_str_match.base;
-    let mut key_point_addr = account_name_addr - 16;
+    let mut key_point_addr = account_name_addr - align;
     while key_point_addr >= mem_base {
         let key_addr = read_number::<usize>(pid, key_point_addr).expect("find key addr failed in memory");
 
@@ -351,7 +353,7 @@ fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInf
             }
         }
 
-        key_point_addr -= 16;
+        key_point_addr -= align;
     }
 
     if key.is_none() {
