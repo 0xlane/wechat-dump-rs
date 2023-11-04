@@ -40,7 +40,7 @@ const RULES: &str = r#"
     rule GetDataDir
     {
         strings:
-            $a = /[a-zA-Z]:\\.{0,100}\\WeChat Files\\[0-9a-zA-Z_-]{6,20}/
+            $a = /[a-zA-Z]:\\.{0,100}?\\WeChat Files\\[0-9a-zA-Z_-]{6,20}?\\/
         
         condition:
             $a
@@ -296,7 +296,7 @@ fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInf
     const AES_BLOCK_SIZE: usize = 16;
     const SALT_SIZE: usize = 16;
     const PAGE_SIZE: usize = 4096;
-    let db_file_path = data_dir.clone() + "\\Msg\\Misc.db";
+    let db_file_path = data_dir.clone() + "Msg\\Misc.db";
     let mut db_file = std::fs::File::open(&db_file_path).expect(format!("{} is not exsit", &db_file_path).as_str());
     let mut buf = [0u8; PAGE_SIZE];
     db_file.read(&mut buf[..]).expect("read Misc.db is failed");
@@ -486,7 +486,7 @@ fn decrypt_db_file(path: &PathBuf, pkey: &String) -> Result<Vec<u8>> {
 }
 
 fn dump_all_by_pid(wechat_info: &WechatInfo, output: &PathBuf) {
-    let msg_dir = wechat_info.data_dir.clone() + "\\Msg";
+    let msg_dir = wechat_info.data_dir.clone() + "Msg";
     let dbfiles = scan_db_files(msg_dir.clone()).unwrap();
     println!("scanned {} files in {}", dbfiles.len(), &msg_dir);
     println!("decryption in progress, please wait...");
@@ -523,7 +523,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.4")
+        .version("1.0.5")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
