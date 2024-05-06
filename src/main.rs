@@ -141,17 +141,16 @@ fn read_bytes(pid: u32, addr: usize, size: usize) -> Result<Vec<u8>> {
     }
 }
 
-fn get_proc_file_version(pid: u32) -> String {
+fn get_proc_file_version(pid: u32) -> Option<String> {
     unsafe {
         tasklist::get_proc_file_info(pid)
             .get("FileVersion")
-            .expect("read file version failed")
-            .to_string()
+            .cloned()
     }
 }
 
 fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInfo {
-    let version = get_proc_file_version(pid);
+    let version = get_proc_file_version(pid).unwrap_or_else(|| "unknown".to_owned());
     println!("[+] wechat version is {}", version);
 
     let pmis = procmem::get_mem_list(pid);
@@ -523,7 +522,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.5")
+        .version("1.0.6")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
