@@ -40,7 +40,7 @@ const RULES: &str = r#"
     rule GetDataDir
     {
         strings:
-            $a = /[a-zA-Z]:\\.{0,100}?\\WeChat Files\\[0-9a-zA-Z_-]{6,20}?\\/
+            $a = /[a-zA-Z]:\\(.{1,100}?\\){0,1}?WeChat Files\\[0-9a-zA-Z_-]{6,20}?\\/
         
         condition:
             $a
@@ -522,7 +522,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.6")
+        .version("1.0.7")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
