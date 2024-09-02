@@ -84,7 +84,7 @@ fn get_pid_by_name(pname: &str) -> Vec<u32> {
     let mut result = vec![];
     unsafe {
         for pp in tasklist::Tasklist::new() {
-            if pp.get_pname() == pname {
+            if pp.get_pname().trim_end_matches("\x00") == pname {
                 result.push(pp.get_pid());
             }
         }
@@ -522,7 +522,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.7")
+        .version("1.0.8")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
