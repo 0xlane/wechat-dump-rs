@@ -244,7 +244,7 @@ fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInf
     println!("[+] login phone type is {}", phone_type_string);
     println!("[+] wechat data dir is {}", data_dir);
 
-    let align = std::mem::size_of::<usize>();   // x64 -> 16, x86 -> 8
+    let align = 2 * std::mem::size_of::<usize>();   // x64 -> 16, x86 -> 8
 
     // account_name 在 phone_type 前面，并且是 16 位补齐的，所以向前找，离得比较近不用找太远的
     let mut start = phone_type_string_addr - align;
@@ -522,7 +522,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.8")
+        .version("1.0.9")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
