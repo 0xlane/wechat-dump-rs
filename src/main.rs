@@ -1,33 +1,40 @@
 pub mod procmem;
 
 use std::{
+    collections::HashSet,
     fs::{self, File},
     io::Read,
     ops::{Add, Sub},
     path::PathBuf,
+    sync::{Arc, Mutex},
 };
 
-use rayon::prelude::*;
-use aes::cipher::{KeyIvInit, BlockDecryptMut, block_padding::NoPadding};
+use aes::cipher::{block_padding::NoPadding, BlockDecryptMut, KeyIvInit};
 use anyhow::{Ok, Result};
 use hmac::{Hmac, Mac};
 use pbkdf2::pbkdf2_hmac_array;
+use rayon::prelude::*;
 use regex::Regex;
 use sha1::Sha1;
+use sha2::Sha512;
+use threadpool::ThreadPool;
 use windows::Win32::{
     Foundation::CloseHandle,
     System::{
         Diagnostics::Debug::ReadProcessMemory,
-        Memory::{PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_READWRITE, PAGE_WRITECOPY, MEM_PRIVATE},
+        Memory::{
+            MEM_PRIVATE, PAGE_EXECUTE_READWRITE, PAGE_EXECUTE_WRITECOPY, PAGE_READWRITE,
+            PAGE_WRITECOPY,
+        },
         Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ},
     },
 };
-use yara::Compiler;
+use yara::{Compiler, Match};
 
 use crate::procmem::ProcessMemoryInfo;
 
-const RULES: &str = r#"
-    rule GetPhoneTypeStringOffset
+const RULES_V3: &str = r#"
+    rule GetPhoneTypeStringOffset_v3
     {
         strings:
             $a = "iphone\x00" ascii fullword
@@ -37,11 +44,53 @@ const RULES: &str = r#"
             any of them
     }
 
-    rule GetDataDir
+    rule GetDataDir_v3
     {
         strings:
             $a = /[a-zA-Z]:\\(.{1,100}?\\){0,1}?WeChat Files\\[0-9a-zA-Z_-]{6,20}?\\/
         
+        condition:
+            $a
+    }
+"#;
+
+const RULES_V4: &str = r#"
+    rule GetKeyStubStr
+    {
+        strings:
+            $a0 = "/cgi-bin/micromsg-bin/getfavinfo"
+            $a1 = "DelayJobSchedule@hardlink_manager.cc"
+            $a2 = "AsyncCheckStorage@message_manager.cc"
+            $a3 = "HandleReceiveAddMsgList@message_manager.cc"
+            $a4 = "StartCheckTimer@res_update_manager.cc"
+            $a5 = "StartCheckUpdateTimer@plugin_manager.cc"
+            $a6 = "StartFtsCoroutine@favorite_fts_manager.cc"
+            $a7 = "StartUpdateTimer@xlab_manager.cc"
+            $a8 = "StartHeartbeatService@heartbeat_center.cc"
+            $a9 = "AsyncCheckRevoke@message_revoke_manager.cc"
+            $a10 = "coroutine-operator()@message_manager.cc"
+            $a11 = "OnReceivePush@netcorecallback_implement.cc"
+            $a12 = "coroutine-operator()@login_service.cc"
+            $a13 = "coroutine-operator()@login_context.cc"
+            $a14 = "coroutine-CriticalLogin@login_manager.cc"
+
+        condition:
+            any of them
+    }
+
+    rule GetDataDir
+    {
+        strings:
+            $a = /[a-zA-Z]:\\(.{1,100}?\\){0,1}?xwechat_files\\wxid_[0-9a-zA-Z_-]{14,19}?\\/
+        
+        condition:
+            $a
+    }
+
+    rule GetPhoneNumberOffset
+    {
+        strings:
+            $a = /[\x04-\x30]\x00{7}\x0f\x00{7}[0-9]{11}\x00{5}\x0b\x00{7}\x0f\x00{7}/
         condition:
             $a
     }
@@ -52,31 +101,49 @@ struct WechatInfo {
     pub pid: u32,
     pub version: String,
     pub account_name: String,
-    pub phone_type: String,
+    pub nick_name: Option<String>,
+    pub phone: Option<String>,
     pub data_dir: String,
     pub key: String,
 }
 
 impl std::fmt::Display for WechatInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            r#"=======================================
+        if self.version.starts_with("4.") {
+            write!(
+                f,
+                r#"=======================================
 ProcessId: {}
 WechatVersion: {}
 AccountName: {}
-PhoneType: {}
+NickName: {}
+Phone: {}
 DataDir: {}
 key: {}
 =======================================
 "#,
-            self.pid,
-            self.version,
-            self.account_name,
-            self.phone_type,
-            self.data_dir,
-            self.key
-        )
+                self.pid,
+                self.version,
+                self.account_name,
+                self.nick_name.clone().unwrap_or("unknown".to_owned()),
+                self.phone.clone().unwrap_or("unknown".to_owned()),
+                self.data_dir,
+                self.key
+            )
+        } else {
+            write!(
+                f,
+                r#"=======================================
+ProcessId: {}
+WechatVersion: {}
+AccountName: {}
+DataDir: {}
+key: {}
+=======================================
+"#,
+                self.pid, self.version, self.account_name, self.data_dir, self.key
+            )
+        }
     }
 }
 
@@ -89,6 +156,8 @@ fn get_pid_by_name(pname: &str) -> Vec<u32> {
             }
         }
     }
+
+    result.sort();
 
     result
 }
@@ -149,10 +218,11 @@ fn get_proc_file_version(pid: u32) -> Option<String> {
     }
 }
 
-fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInfo {
-    let version = get_proc_file_version(pid).unwrap_or_else(|| "unknown".to_owned());
-    println!("[+] wechat version is {}", version);
-
+fn dump_wechat_info_v3(
+    pid: u32,
+    special_data_dir: Option<&PathBuf>,
+    version: String,
+) -> WechatInfo {
     let pmis = procmem::get_mem_list(pid);
 
     let wechatwin_all_mem_infos: Vec<&ProcessMemoryInfo> = pmis
@@ -176,27 +246,22 @@ fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInf
 
     let wechat_writeable_private_mem_infos: Vec<&ProcessMemoryInfo> = pmis
         .iter()
-        .filter(|x| {
-            (x.protect & (PAGE_READWRITE | PAGE_WRITECOPY)).0 > 0 && x.mtype == MEM_PRIVATE
-        })
+        .filter(|x| (x.protect & (PAGE_READWRITE | PAGE_WRITECOPY)).0 > 0 && x.mtype == MEM_PRIVATE)
         .collect();
 
     // 使用 yara 匹配到登录设备的地址和数据目录
     let compiler = Compiler::new().unwrap();
     let compiler = compiler
-        .add_rules_str(RULES)
+        .add_rules_str(RULES_V3)
         .expect("Should have parsed rule");
     let rules = compiler
         .compile_rules()
         .expect("Should have compiled rules");
-    let results = rules
-        .scan_process(pid, 0)
-        // .scan_file(r"C:\Users\thin0\Desktop\WeChatWin.dll", 0)
-        .expect("Should have scanned");
+    let results = rules.scan_process(pid, 0).expect("Should have scanned");
 
     let phone_type_str_match = results
         .iter()
-        .filter(|x| x.identifier == "GetPhoneTypeStringOffset")
+        .filter(|x| x.identifier == "GetPhoneTypeStringOffset_v3")
         .next()
         .expect("unbale to find phone type string")
         .strings
@@ -223,11 +288,16 @@ fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInf
     let phone_type_string =
         read_string(pid, phone_type_string_addr, 20).expect("read phone type string failed");
     let data_dir = if special_data_dir.is_some() {
-        special_data_dir.unwrap().clone().into_os_string().into_string().unwrap()
+        special_data_dir
+            .unwrap()
+            .clone()
+            .into_os_string()
+            .into_string()
+            .unwrap()
     } else {
         let data_dir_match = results
             .iter()
-            .filter(|x| x.identifier == "GetDataDir")
+            .filter(|x| x.identifier == "GetDataDir_v3")
             .next()
             .expect("unable to find data dir")
             .strings
@@ -235,7 +305,11 @@ fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInf
             .expect("unable to find data dir")
             .matches
             .iter()
-            .filter(|x| wechat_writeable_private_mem_infos.iter().any(|pmi| pmi.base == x.base))
+            .filter(|x| {
+                wechat_writeable_private_mem_infos
+                    .iter()
+                    .any(|pmi| pmi.base == x.base)
+            })
             .next()
             .expect("unable to find data dir");
         String::from_utf8(data_dir_match.data.clone()).expect("data dir is invalid string")
@@ -244,7 +318,7 @@ fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInf
     println!("[+] login phone type is {}", phone_type_string);
     println!("[+] wechat data dir is {}", data_dir);
 
-    let align = 2 * std::mem::size_of::<usize>();   // x64 -> 16, x86 -> 8
+    let align = 2 * std::mem::size_of::<usize>(); // x64 -> 16, x86 -> 8
 
     // account_name 在 phone_type 前面，并且是 16 位补齐的，所以向前找，离得比较近不用找太远的
     let mut start = phone_type_string_addr - align;
@@ -253,10 +327,11 @@ fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInf
     let mut count = 0;
     while start >= phone_type_string_addr - align * 20 {
         // 名字长度>=16，就会变成指针，不直接存放字符串
-        let account_name_point_address = read_number::<usize>(pid, start)
-        .expect("read account name point address failed");
+        let account_name_point_address =
+            read_number::<usize>(pid, start).expect("read account name point address failed");
         let result = if pmis.iter().any(|x| {
-            account_name_point_address >= x.base && account_name_point_address <= x.base + x.region_size
+            account_name_point_address >= x.base
+                && account_name_point_address <= x.base + x.region_size
         }) {
             read_string(pid, account_name_point_address, 100)
         } else {
@@ -268,7 +343,7 @@ fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInf
 
             // 微信号是字母、数字、下划线组合，6-20位
             let re = Regex::new(r"^[a-zA-Z0-9_]+$").unwrap();
-            if re.is_match(&ac) && ac.len() >= 6 && ac.len() <= 20{
+            if re.is_match(&ac) && ac.len() >= 6 && ac.len() <= 20 {
                 // 首次命中可能是原始的 wxid_，第二次是修改后的微信号，找不到第二次说明注册后没改过微信号
                 account_name = Some(ac);
                 account_name_addr = start;
@@ -281,7 +356,7 @@ fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInf
 
         start -= align;
     }
-    
+
     if account_name.is_none() {
         panic!("not found account name address");
     }
@@ -296,19 +371,25 @@ fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInf
     const SALT_SIZE: usize = 16;
     const PAGE_SIZE: usize = 4096;
     let db_file_path = data_dir.clone() + "Msg\\Misc.db";
-    let mut db_file = std::fs::File::open(&db_file_path).expect(format!("{} is not exsit", &db_file_path).as_str());
+    let mut db_file = std::fs::File::open(&db_file_path)
+        .expect(format!("{} is not exsit", &db_file_path).as_str());
     let mut buf = [0u8; PAGE_SIZE];
     db_file.read(&mut buf[..]).expect("read Misc.db is failed");
-    
+
     // key 在微信号前面找
     let mut key: Option<String> = None;
     let mem_base = phone_type_str_match.base;
     let mut key_point_addr = account_name_addr - align;
     while key_point_addr >= mem_base {
-        let key_addr = read_number::<usize>(pid, key_point_addr).expect("find key addr failed in memory");
+        let key_addr =
+            read_number::<usize>(pid, key_point_addr).expect("find key addr failed in memory");
 
-        if wechat_writeable_private_mem_infos.iter().any(|x| key_addr >= x.base && key_addr <= x.base + x.region_size) {
-            let key_bytes = read_bytes(pid, key_addr, KEY_SIZE).expect("find key bytes failed in memory");
+        if wechat_writeable_private_mem_infos
+            .iter()
+            .any(|x| key_addr >= x.base && key_addr <= x.base + x.region_size)
+        {
+            let key_bytes =
+                read_bytes(pid, key_addr, KEY_SIZE).expect("find key bytes failed in memory");
             if key_bytes.iter().filter(|&&x| x == 0x00).count() < 5 {
                 // 验证 key 是否有效
                 let start = SALT_SIZE;
@@ -337,8 +418,9 @@ fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInf
                 type HamcSha1 = Hmac<Sha1>;
 
                 unsafe {
-                    let mut mac = HamcSha1::new_from_slice(&mac_key).expect("hmac_sha1 error, key length is invalid");
-                    mac.update(&buf[start..end-reserve+IV_SIZE]);
+                    let mut mac = HamcSha1::new_from_slice(&mac_key)
+                        .expect("hmac_sha1 error, key length is invalid");
+                    mac.update(&buf[start..end - reserve + IV_SIZE]);
                     mac.update(std::mem::transmute::<_, &[u8; 4]>(&(1u32)).as_ref());
                     let hash_mac = mac.finalize().into_bytes().to_vec();
 
@@ -358,14 +440,266 @@ fn dump_wechat_info(pid: u32, special_data_dir: Option::<&PathBuf>) -> WechatInf
     if key.is_none() {
         panic!("not found key");
     }
-    
+
     WechatInfo {
         pid,
         version,
         account_name,
-        phone_type: phone_type_string,
+        nick_name: None,
+        phone: None,
         data_dir,
-        key: key.unwrap()
+        key: key.unwrap(),
+    }
+}
+
+fn dump_wechat_info_v4(
+    pid: u32,
+    special_data_dir: Option<&PathBuf>,
+    version: String,
+) -> WechatInfo {
+    let pmis = procmem::get_mem_list(pid);
+
+    let wechat_writeable_private_mem_infos: Vec<&ProcessMemoryInfo> = pmis
+        .iter()
+        .filter(|x| (x.protect & (PAGE_READWRITE | PAGE_WRITECOPY)).0 > 0 && x.mtype == MEM_PRIVATE)
+        .collect();
+
+    // 使用 yara 匹配到用户信息地址和数据目录
+    let compiler = Compiler::new().unwrap();
+    let compiler = compiler
+        .add_rules_str(RULES_V4)
+        .expect("Should have parsed rule");
+    let rules = compiler
+        .compile_rules()
+        .expect("Should have compiled rules");
+    let results = rules.scan_process(pid, 0).expect("Should have scanned");
+
+    let phone_str_match = results
+        .iter()
+        .filter(|x| x.identifier == "GetPhoneNumberOffset")
+        .next()
+        .expect("unbale to find phone string")
+        .strings
+        .iter()
+        .filter(|x| {
+            x.matches.iter().any(|y| {
+                wechat_writeable_private_mem_infos
+                    .iter()
+                    .any(|z| y.base == z.base)
+            })
+        })
+        .next()
+        .expect("unbale to find phone string")
+        .matches
+        .iter()
+        .filter(|x| {
+            wechat_writeable_private_mem_infos
+                .iter()
+                .any(|y| x.base == y.base)
+        })
+        .next()
+        .expect("unable to find phone string");
+
+    let nick_name_length = u64::from_le_bytes(phone_str_match.data[..8].try_into().unwrap());
+    let phone_str_address = phone_str_match.base + phone_str_match.offset + 0x10;
+    let phone_str = read_string(pid, phone_str_address, 11).unwrap();
+    let nick_name = read_string(pid, phone_str_address - 0x20, nick_name_length as usize).unwrap();
+
+    let account_name_length = read_number::<u64>(pid, phone_str_address - 0x30).unwrap();
+    let account_name =
+        read_string(pid, phone_str_address - 0x40, account_name_length as _).unwrap();
+
+    let data_dir = if special_data_dir.is_some() {
+        special_data_dir
+            .unwrap()
+            .clone()
+            .into_os_string()
+            .into_string()
+            .unwrap()
+    } else {
+        let data_dir_match = results
+            .iter()
+            .filter(|x| x.identifier == "GetDataDir")
+            .next()
+            .expect("unbale to find data dir")
+            .strings
+            .iter()
+            .filter(|x| {
+                x.matches.iter().any(|y| {
+                    wechat_writeable_private_mem_infos
+                        .iter()
+                        .any(|z| y.base == z.base)
+                })
+            })
+            .next()
+            .expect("unbale to find data dir")
+            .matches
+            .iter()
+            .filter(|x| {
+                wechat_writeable_private_mem_infos
+                    .iter()
+                    .any(|y| x.base == y.base)
+            })
+            .next()
+            .expect("unable to find data dir");
+
+        String::from_utf8(data_dir_match.data.clone()).unwrap()
+    };
+
+    let key_stub_str_matchs = results
+        .iter()
+        .filter(|x| x.identifier == "GetKeyStubStr")
+        .next()
+        .expect("unbale to find key stub str")
+        .strings
+        .iter()
+        .filter(|x| {
+            x.matches.iter().any(|y| {
+                wechat_writeable_private_mem_infos
+                    .iter()
+                    .any(|z| y.base == z.base)
+            })
+        })
+        .next()
+        .expect("unbale to find key stub str")
+        .matches
+        .iter()
+        .filter(|x| {
+            wechat_writeable_private_mem_infos
+                .iter()
+                .any(|y| x.base == y.base)
+        })
+        .collect::<Vec<&Match>>();
+
+    if key_stub_str_matchs.len() == 0 {
+        panic!("unable to find key stub str");
+    }
+
+    // 读取一个文件准备暴力搜索key
+    const IV_SIZE: usize = 16;
+    const HMAC_SHA512_SIZE: usize = 64;
+    const KEY_SIZE: usize = 32;
+    const AES_BLOCK_SIZE: usize = 16;
+    const SALT_SIZE: usize = 16;
+    const PAGE_SIZE: usize = 4096;
+    const ROUND_COUNT: u32 = 256000;
+    let db_file_path = data_dir.clone() + r"db_storage\biz\biz.db";
+    let mut db_file = std::fs::File::open(&db_file_path)
+        .expect(format!("{} is not exsit", &db_file_path).as_str());
+    let mut buf = [0u8; PAGE_SIZE];
+    db_file.read(&mut buf[..]).expect("read biz.db is failed");
+
+    let mut pre_addresses: HashSet<usize> = HashSet::new();
+    for cur_delayjob_match in key_stub_str_matchs {
+        // 向上向下搜，32字节对齐
+        const SEARCH_COUNT: i8 = 15;
+        let cur_offset = cur_delayjob_match.base + cur_delayjob_match.offset;
+        for i in -SEARCH_COUNT..=SEARCH_COUNT {
+            let cur_key_offset = (cur_offset as isize + (KEY_SIZE as isize * i as isize)) as usize;
+
+            if cur_key_offset < cur_delayjob_match.base || cur_key_offset == cur_offset {
+                continue;
+            }
+
+            pre_addresses.insert(cur_key_offset);
+        }
+    }
+
+    // HMAC_SHA512算法比较耗时，使用多线程跑
+    let max_thread_num = num_cpus::get();
+    let pool = ThreadPool::new(max_thread_num);
+    let n_job = pre_addresses.len();
+    let key = Arc::new(Mutex::new(None));
+
+    for i in 0..n_job {
+        let cur_key_offset = pre_addresses.iter().nth(i).unwrap().clone();
+        let key = Arc::clone(&key);
+        let ex_key = Arc::clone(&key);
+        pool.execute(move || {
+            // println!("{:x}", cur_key_offset);
+            let key_bytes =
+                read_bytes(pid, cur_key_offset, KEY_SIZE).expect("find key bytes failed in memory");
+            if key_bytes.iter().filter(|&&x| x == 0x00).count() < 5 {
+                // 验证 key 是否有效
+                let start = SALT_SIZE;
+                let end = PAGE_SIZE;
+
+                // 获取到文件开头的 salt
+                let salt = buf[..SALT_SIZE].to_owned();
+                // salt 异或 0x3a 得到 mac_salt， 用于计算HMAC
+                let mac_salt: Vec<u8> = salt.to_owned().iter().map(|x| x ^ 0x3a).collect();
+
+                // 通过 key_bytes 和 salt 迭代 ROUND_COUNT 次解出一个新的 key，用于解密
+                let new_key = pbkdf2_hmac_array::<Sha512, KEY_SIZE>(&key_bytes, &salt, ROUND_COUNT);
+
+                // 通过 key 和 mac_salt 迭代 2 次解出 mac_key
+                let mac_key = pbkdf2_hmac_array::<Sha512, KEY_SIZE>(&new_key, &mac_salt, 2);
+                // let real_key = [&mac_key, &mac_salt[..]].concat(); // sqlcipher_rawkey
+
+                // hash检验码对齐后长度 48，后面校验哈希用
+                let mut reserve = IV_SIZE + HMAC_SHA512_SIZE;
+                reserve = if (reserve % AES_BLOCK_SIZE) == 0 {
+                    reserve
+                } else {
+                    ((reserve / AES_BLOCK_SIZE) + 1) * AES_BLOCK_SIZE
+                };
+
+                // 校验哈希
+                type HamcSha512 = Hmac<Sha512>;
+
+                unsafe {
+                    let mut mac = HamcSha512::new_from_slice(&mac_key)
+                        .expect("hmac_sha512 error, key length is invalid");
+                    mac.update(&buf[start..end - reserve + IV_SIZE]);
+                    mac.update(std::mem::transmute::<_, &[u8; 4]>(&(1u32)).as_ref()); // pageno
+                    let hash_mac = mac.finalize().into_bytes().to_vec();
+
+                    let hash_mac_start_offset = end - reserve + IV_SIZE;
+                    let hash_mac_end_offset = hash_mac_start_offset + hash_mac.len();
+                    if hash_mac == &buf[hash_mac_start_offset..hash_mac_end_offset] {
+                        let mut key = key.lock().unwrap();
+                        if key.is_none() {
+                            // println!("found key at 0x{:x}", cur_key_offset);
+                            *key = Some(hex::encode(key_bytes));
+                            // println!("key is {}", (*key).clone().unwrap());
+                        }
+                    }
+                }
+            }
+        });
+
+        if ex_key.lock().unwrap().is_some() {
+            break;
+        }
+    }
+
+    pool.join();
+
+    let key = key.lock().unwrap();
+
+    if key.is_none() {
+        panic!("not found key!!");
+    }
+
+    WechatInfo {
+        pid,
+        version,
+        account_name,
+        nick_name: Some(nick_name),
+        phone: Some(phone_str),
+        data_dir,
+        key: key.clone().unwrap(),
+    }
+}
+
+fn dump_wechat_info(pid: u32, special_data_dir: Option<&PathBuf>) -> WechatInfo {
+    let version = get_proc_file_version(pid).unwrap_or_else(|| "unknown".to_owned());
+    println!("[+] wechat version is {}", version);
+
+    if version.starts_with("4.") {
+        dump_wechat_info_v4(pid, special_data_dir, version)
+    } else {
+        dump_wechat_info_v3(pid, special_data_dir, version)
     }
 }
 
@@ -393,11 +727,14 @@ fn read_file_content(path: &PathBuf) -> Result<Vec<u8>> {
     Ok(buffer)
 }
 
-fn decrypt_db_file(path: &PathBuf, pkey: &String) -> Result<Vec<u8>> {
+fn decrypt_db_file_v3(path: &PathBuf, pkey: &String) -> Result<Vec<u8>> {
     const IV_SIZE: usize = 16;
     const HMAC_SHA1_SIZE: usize = 20;
     const KEY_SIZE: usize = 32;
     const AES_BLOCK_SIZE: usize = 16;
+    const ROUND_COUNT: u32 = 64000;
+    const PAGE_SIZE: usize = 4096;
+    const SALT_SIZE: usize = 16;
     const SQLITE_HEADER: &str = "SQLite format 3";
 
     let mut buf = read_file_content(path)?;
@@ -415,9 +752,9 @@ fn decrypt_db_file(path: &PathBuf, pkey: &String) -> Result<Vec<u8>> {
     let mac_salt: Vec<u8> = salt.to_owned().iter().map(|x| x ^ 0x3a).collect();
 
     unsafe {
-        // 通过 pkey 和 salt 迭代64000次解出一个新的 key，用于解密
+        // 通过 pkey 和 salt 迭代 ROUND_COUNT 次解出一个新的 key，用于解密
         let pass = hex::decode(pkey)?;
-        let key = pbkdf2_hmac_array::<Sha1, KEY_SIZE>(&pass, &salt, 64000);
+        let key = pbkdf2_hmac_array::<Sha1, KEY_SIZE>(&pass, &salt, ROUND_COUNT);
 
         // 通过 key 和 mac_salt 迭代2次解出 mac_key
         let mac_key = pbkdf2_hmac_array::<Sha1, KEY_SIZE>(&key, &mac_salt, 2);
@@ -435,14 +772,9 @@ fn decrypt_db_file(path: &PathBuf, pkey: &String) -> Result<Vec<u8>> {
         };
 
         // 每页大小4096，分别解密
-        const PAGE_SIZE: usize = 4096;
         let total_page = (buf.len() as f64 / PAGE_SIZE as f64).ceil() as usize;
         for cur_page in 0..total_page {
-            let offset = if cur_page == 0 {
-                16
-            } else {
-                0
-            };
+            let offset = if cur_page == 0 { SALT_SIZE } else { 0 };
             let start: usize = cur_page * PAGE_SIZE;
             let end: usize = if (cur_page + 1) == total_page {
                 start + buf.len() % PAGE_SIZE
@@ -460,7 +792,7 @@ fn decrypt_db_file(path: &PathBuf, pkey: &String) -> Result<Vec<u8>> {
             type HamcSha1 = Hmac<Sha1>;
 
             let mut mac = HamcSha1::new_from_slice(&mac_key)?;
-            mac.update(&buf[start+offset..end-reserve+IV_SIZE]);
+            mac.update(&buf[start + offset..end - reserve + IV_SIZE]);
             mac.update(std::mem::transmute::<_, &[u8; 4]>(&(cur_page as u32 + 1)).as_ref());
             let hash_mac = mac.finalize().into_bytes().to_vec();
 
@@ -473,11 +805,104 @@ fn decrypt_db_file(path: &PathBuf, pkey: &String) -> Result<Vec<u8>> {
             // aes-256-cbc 解密内容
             type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
-            let iv = &buf[end-reserve..end-reserve+IV_SIZE];
-            decrypted_buf.extend(Aes256CbcDec::new(&key.into(), iv.into())
-                .decrypt_padded_mut::<NoPadding>(&mut buf[start+offset..end-reserve])
-                .map_err(anyhow::Error::msg)?);
-            decrypted_buf.extend(&buf[end-reserve..end]);
+            let iv = &buf[end - reserve..end - reserve + IV_SIZE];
+            decrypted_buf.extend(
+                Aes256CbcDec::new(&key.into(), iv.into())
+                    .decrypt_padded_mut::<NoPadding>(&mut buf[start + offset..end - reserve])
+                    .map_err(anyhow::Error::msg)?,
+            );
+            decrypted_buf.extend(&buf[end - reserve..end]);
+        }
+    }
+
+    Ok(decrypted_buf)
+}
+
+fn decrypt_db_file_v4(path: &PathBuf, pkey: &String) -> Result<Vec<u8>> {
+    const IV_SIZE: usize = 16;
+    const HMAC_SHA256_SIZE: usize = 64;
+    const KEY_SIZE: usize = 32;
+    const AES_BLOCK_SIZE: usize = 16;
+    const ROUND_COUNT: u32 = 256000;
+    const PAGE_SIZE: usize = 4096;
+    const SALT_SIZE: usize = 16;
+    const SQLITE_HEADER: &str = "SQLite format 3";
+
+    let mut buf = read_file_content(path)?;
+
+    // 如果开头是 SQLITE_HEADER，说明不需要解密
+    if buf.starts_with(SQLITE_HEADER.as_bytes()) {
+        return Ok(buf);
+    }
+
+    let mut decrypted_buf: Vec<u8> = vec![];
+
+    // 获取到文件开头的 salt，用于解密 key
+    let salt = buf[..16].to_owned();
+    // salt 异或 0x3a 得到 mac_salt， 用于计算HMAC
+    let mac_salt: Vec<u8> = salt.to_owned().iter().map(|x| x ^ 0x3a).collect();
+
+    unsafe {
+        // 通过 pkey 和 salt 迭代 ROUND_COUNT 次解出一个新的 key，用于解密
+        let pass = hex::decode(pkey)?;
+        let key = pbkdf2_hmac_array::<Sha512, KEY_SIZE>(&pass, &salt, ROUND_COUNT);
+
+        // 通过 key 和 mac_salt 迭代2次解出 mac_key
+        let mac_key = pbkdf2_hmac_array::<Sha512, KEY_SIZE>(&key, &mac_salt, 2);
+
+        // 开头是 sqlite 头
+        decrypted_buf.extend(SQLITE_HEADER.as_bytes());
+        decrypted_buf.push(0x00);
+
+        // hash检验码对齐后长度 48，后面校验哈希用
+        let mut reserve = IV_SIZE + HMAC_SHA256_SIZE;
+        reserve = if (reserve % AES_BLOCK_SIZE) == 0 {
+            reserve
+        } else {
+            ((reserve / AES_BLOCK_SIZE) + 1) * AES_BLOCK_SIZE
+        };
+
+        // 每页大小4096，分别解密
+        let total_page = (buf.len() as f64 / PAGE_SIZE as f64).ceil() as usize;
+        for cur_page in 0..total_page {
+            let offset = if cur_page == 0 { SALT_SIZE } else { 0 };
+            let start: usize = cur_page * PAGE_SIZE;
+            let end: usize = if (cur_page + 1) == total_page {
+                start + buf.len() % PAGE_SIZE
+            } else {
+                start + PAGE_SIZE
+            };
+
+            // 搞不懂，这一堆0是干啥的，文件大小直接翻倍了
+            if buf[start..end].iter().all(|&x| x == 0) {
+                decrypted_buf.extend(&buf[start..]);
+                break;
+            }
+
+            // 校验哈希
+            type HamcSha512 = Hmac<Sha512>;
+
+            let mut mac = HamcSha512::new_from_slice(&mac_key)?;
+            mac.update(&buf[start + offset..end - reserve + IV_SIZE]);
+            mac.update(std::mem::transmute::<_, &[u8; 4]>(&(cur_page as u32 + 1)).as_ref());
+            let hash_mac = mac.finalize().into_bytes().to_vec();
+
+            let hash_mac_start_offset = end - reserve + IV_SIZE;
+            let hash_mac_end_offset = hash_mac_start_offset + hash_mac.len();
+            if hash_mac != &buf[hash_mac_start_offset..hash_mac_end_offset] {
+                return Err(anyhow::anyhow!("Hash verification failed"));
+            }
+
+            // aes-256-cbc 解密内容
+            type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
+
+            let iv = &buf[end - reserve..end - reserve + IV_SIZE];
+            decrypted_buf.extend(
+                Aes256CbcDec::new(&key.into(), iv.into())
+                    .decrypt_padded_mut::<NoPadding>(&mut buf[start + offset..end - reserve])
+                    .map_err(anyhow::Error::msg)?,
+            );
+            decrypted_buf.extend(&buf[end - reserve..end]);
         }
     }
 
@@ -485,7 +910,11 @@ fn decrypt_db_file(path: &PathBuf, pkey: &String) -> Result<Vec<u8>> {
 }
 
 fn dump_all_by_pid(wechat_info: &WechatInfo, output: &PathBuf) {
-    let msg_dir = wechat_info.data_dir.clone() + "Msg";
+    let msg_dir = if wechat_info.version.starts_with("4.0") {
+        wechat_info.data_dir.clone() + "db_storage"
+    } else {
+        wechat_info.data_dir.clone() + "Msg"
+    };
     let dbfiles = scan_db_files(msg_dir.clone()).unwrap();
     println!("scanned {} files in {}", dbfiles.len(), &msg_dir);
     println!("decryption in progress, please wait...");
@@ -494,7 +923,11 @@ fn dump_all_by_pid(wechat_info: &WechatInfo, output: &PathBuf) {
     if output.is_file() {
         panic!("the output path must be a directory");
     }
-    let output_dir = PathBuf::from(format!("{}\\wechat_{}", output.to_str().unwrap(), wechat_info.pid));
+    let output_dir = PathBuf::from(format!(
+        "{}\\wechat_{}",
+        output.to_str().unwrap(),
+        wechat_info.pid
+    ));
     if !output_dir.exists() {
         std::fs::create_dir_all(&output_dir).unwrap();
     }
@@ -503,7 +936,13 @@ fn dump_all_by_pid(wechat_info: &WechatInfo, output: &PathBuf) {
         let mut db_file_dir = PathBuf::new();
         let mut dest = PathBuf::new();
         db_file_dir.push(&output_dir);
-        db_file_dir.push(dbfile.parent().unwrap().strip_prefix(PathBuf::from(msg_dir.clone())).unwrap());
+        db_file_dir.push(
+            dbfile
+                .parent()
+                .unwrap()
+                .strip_prefix(PathBuf::from(msg_dir.clone()))
+                .unwrap(),
+        );
         dest.push(db_file_dir.clone());
         dest.push(dbfile.file_name().unwrap());
 
@@ -511,7 +950,11 @@ fn dump_all_by_pid(wechat_info: &WechatInfo, output: &PathBuf) {
             std::fs::create_dir_all(db_file_dir).unwrap();
         }
 
-        std::fs::write(dest, decrypt_db_file(&dbfile, &wechat_info.key).unwrap()).unwrap();
+        if wechat_info.version.starts_with("4.0") {
+            std::fs::write(dest, decrypt_db_file_v4(&dbfile, &wechat_info.key).unwrap()).unwrap();
+        } else {
+            std::fs::write(dest, decrypt_db_file_v3(&dbfile, &wechat_info.key).unwrap()).unwrap();
+        }
     });
     println!("decryption complete!!");
     println!("output to {}", output_dir.to_str().unwrap());
@@ -522,7 +965,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.9")
+        .version("1.0.10")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
@@ -533,9 +976,20 @@ fn cli() -> clap::Command {
                 .value_parser(value_parser!(String)),
         )
         .arg(arg!(-f --file <PATH> "special a db file path").value_parser(value_parser!(PathBuf)))
-        .arg(arg!(-d --"data-dir" <PATH> "special wechat data dir path (pid is required)").value_parser(value_parser!(PathBuf)))
-        .arg(arg!(-o --output <PATH> "decrypted database output path").value_parser(value_parser!(PathBuf)))
+        .arg(
+            arg!(-d --"data-dir" <PATH> "special wechat data dir path (pid is required)")
+                .value_parser(value_parser!(PathBuf)),
+        )
+        .arg(
+            arg!(-o --output <PATH> "decrypted database output path")
+                .value_parser(value_parser!(PathBuf)),
+        )
         .arg(arg!(-a --all "dump key and decrypt db files"))
+        .arg(
+            arg!(-v <VERSION> "decrypt 4.0 db files")
+                .value_parser(["3", "4"])
+                .default_value("4"),
+        )
 }
 
 fn main() {
@@ -545,7 +999,11 @@ fn main() {
     let all = matches.get_flag("all");
     let output = match matches.get_one::<PathBuf>("output") {
         Some(o) => PathBuf::from(o),
-        None => PathBuf::from(format!("{}{}", std::env::temp_dir().to_str().unwrap(), "wechat_dump"))
+        None => PathBuf::from(format!(
+            "{}{}",
+            std::env::temp_dir().to_str().unwrap(),
+            "wechat_dump"
+        )),
     };
 
     let key_option = matches.get_one::<String>("key");
@@ -555,7 +1013,12 @@ fn main() {
 
     match (pid_option, key_option, file_option) {
         (None, None, None) => {
-            for pid in get_pid_by_name("WeChat.exe") {
+            let pids = [
+                get_pid_by_name("WeChat.exe"),
+                get_pid_by_name("Weixin.exe").into_iter().take(1).collect(),
+            ]
+            .concat();
+            for pid in pids {
                 let wechat_info = dump_wechat_info(pid, None);
                 println!("{}", wechat_info);
                 println!();
@@ -565,7 +1028,7 @@ fn main() {
                     dump_all_by_pid(&wechat_info, &output);
                 }
             }
-        },
+        }
         (Some(&pid), None, None) => {
             let wechat_info = dump_wechat_info(pid, data_dir_option);
             println!("{}", wechat_info);
@@ -575,16 +1038,25 @@ fn main() {
             if all {
                 dump_all_by_pid(&wechat_info, &output);
             }
-        },
+        }
         (None, Some(key), Some(file)) => {
             if !file.exists() {
                 panic!("the target file does not exist");
             }
-            
+            let is_v4 = if matches.get_one::<String>("v").unwrap() == "4" {
+                true
+            } else {
+                false
+            };
+
             match file.is_dir() {
                 true => {
                     let dbfiles = scan_db_files(file.to_str().unwrap().to_string()).unwrap();
-                    println!("scanned {} files in {}", dbfiles.len(), &file.to_str().unwrap());
+                    println!(
+                        "scanned {} files in {}",
+                        dbfiles.len(),
+                        &file.to_str().unwrap()
+                    );
                     println!("decryption in progress, please wait...");
 
                     // 创建输出目录
@@ -599,7 +1071,13 @@ fn main() {
                         let mut db_file_dir = PathBuf::new();
                         let mut dest = PathBuf::new();
                         db_file_dir.push(&output);
-                        db_file_dir.push(dbfile.parent().unwrap().strip_prefix(PathBuf::from(&file)).unwrap());
+                        db_file_dir.push(
+                            dbfile
+                                .parent()
+                                .unwrap()
+                                .strip_prefix(PathBuf::from(&file))
+                                .unwrap(),
+                        );
                         dest.push(db_file_dir.clone());
                         dest.push(dbfile.file_name().unwrap());
 
@@ -607,18 +1085,28 @@ fn main() {
                             std::fs::create_dir_all(db_file_dir).unwrap();
                         }
 
-                        std::fs::write(dest, decrypt_db_file(&dbfile, &key).unwrap()).unwrap();
+                        if is_v4 {
+                            std::fs::write(dest, decrypt_db_file_v4(&dbfile, &key).unwrap())
+                                .unwrap();
+                        } else {
+                            std::fs::write(dest, decrypt_db_file_v3(&dbfile, &key).unwrap())
+                                .unwrap();
+                        }
                     }
                     println!("decryption complete!!");
                     println!("output to {}", output.to_str().unwrap());
                     println!();
-                },
+                }
                 false => {
-                    std::fs::write(&output, decrypt_db_file(&file, &key).unwrap()).unwrap();
+                    if is_v4 {
+                        std::fs::write(&output, decrypt_db_file_v4(&file, &key).unwrap()).unwrap();
+                    } else {
+                        std::fs::write(&output, decrypt_db_file_v3(&file, &key).unwrap()).unwrap();
+                    }
                     println!("output to {}", output.to_str().unwrap());
                 }
             }
-        },
-        _ => panic!("param error")
+        }
+        _ => panic!("param error"),
     }
 }
