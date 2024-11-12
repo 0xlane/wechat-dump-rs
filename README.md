@@ -1,13 +1,16 @@
-# wechat-dump-rs
+# wechat-dump-rs （支持微信4.0版本）
 
 该工具用于导出正在运行中的微信进程的 key 并自动解密所有微信数据库文件以及导出 key 后数据库文件离线解密。
 
 > **可能存在封号风险，后果自负！！！**
+>
+> **使用需知**：
+> 微信4.0 重构后改用 HMAC_SHA512 算法，寻找 key 的方式和 v3 不同，工具内仍然采用内存暴力搜索的方式，对于 v4 解密时将使用多线程加速，会导致 cpu 飙到 100%，等后期优化下，介意勿用！！
 
 ## 工具用法
 
 ```bash
-wechat-dump-rs (1.0.3) - REinject
+wechat-dump-rs (1.0.10) - REinject
 A wechat db dump tool
 Options:
   -p, --pid <PID>        pid of wechat
@@ -15,19 +18,22 @@ Options:
   -f, --file <PATH>      special a db file path
   -d, --data-dir <PATH>  special wechat data dir path (pid is required)
   -o, --output <PATH>    decrypted database output path
+  -a, --all              dump key and decrypt db files
+  -v <VERSION>           decrypt 4.0 db files [default: 4] [possible values: 3, 4]
   -h, --help             Print help
 ```
 
-如果不带任何参数，程序只输出所有微信进程的 key、微信号、登录设备、数据目录、版本等信息：
+如果不带任何参数，程序只输出所有微信进程的 key、微信号、手机号、数据目录、版本等信息：
 
 ```bash
 =======================================
-ProcessId: 12768
-WechatVersion: 3.9.7.25
-AccountName: nihao123
-PhoneType: iphone
-DataDir: C:\Users\test\Documents\WeChat Files\wxid_uy9q2sudtiqv22
-key: b16aa99b8e8323f6bb0ebf2ef83ff88f2e47d86d913345933a7168d55aa7e362
+ProcessId: 4276
+WechatVersion: 4.0.0.26
+AccountName: xxxxxx
+NickName: xxxxxx
+Phone: 15111611111
+DataDir: C:\Users\xxx\Documents\xwechat_files\wxid_xxxx_xxa\
+key: f11fd83bxxxxxx4f3f4x4ddxxxxxe417696b4axx19e09489ad48c
 =======================================
 ```
 
@@ -57,6 +63,7 @@ key: b16aa99b8e8323f6bb0ebf2ef83ff88f2e47d86d913345933a7168d55aa7e362
 - 3.9.11.25
 - 3.9.12.15
 - 3.9.12.17
+- 4.0.0.26
 
 ## 如何手动寻找偏移
 
