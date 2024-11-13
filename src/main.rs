@@ -497,9 +497,10 @@ fn dump_wechat_info_v4(
         .next()
         .expect("unable to find phone string");
 
-    let key_memory_info = wechat_writeable_private_mem_infos.iter().find(|v| {
-        v.base == phone_str_match.base
-    }).unwrap();
+    let key_memory_info = wechat_writeable_private_mem_infos
+        .iter()
+        .find(|v| v.base == phone_str_match.base)
+        .unwrap();
     let key_search_range = 0..key_memory_info.base + key_memory_info.region_size;
 
     let nick_name_length = u64::from_le_bytes(phone_str_match.data[..8].try_into().unwrap());
@@ -617,7 +618,10 @@ rule GetKeyAddrStub
     db_file.read(&mut buf[..]).expect("read biz.db is failed");
 
     let mut pre_addresses: HashSet<u64> = HashSet::new();
-    key_stub_str_addresses.sort_by(|a, b| b.cmp(a));
+    key_stub_str_addresses.sort_by(|&a, &b| {
+        a.abs_diff(phone_str_address as _)
+            .cmp(&b.abs_diff(phone_str_address as _))
+    });
     for cur_stub_addr in key_stub_str_addresses {
         if cur_stub_addr < key_search_range.end as _ {
             if wechat_writeable_private_mem_infos.iter().any(|v| {
@@ -641,7 +645,9 @@ rule GetKeyAddrStub
             "find key bytes failed in memory: {:X}",
             cur_key_offset
         ));
-        if key_bytes.iter().filter(|&&x| x == 0x00).count() == 0 {
+        if key_bytes.iter().filter(|&&x| x <= 127).count() < 20
+            && key_bytes.iter().filter(|&&x| x == 0).count() < 2
+        {
             // 验证 key 是否有效
             let start = SALT_SIZE;
             let end = PAGE_SIZE;
@@ -984,7 +990,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.11")
+        .version("1.0.12")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
