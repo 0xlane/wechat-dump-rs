@@ -1,3 +1,4 @@
+pub mod process;
 pub mod procmem;
 
 use std::{
@@ -6,18 +7,17 @@ use std::{
     io::Read,
     ops::{Add, Sub},
     path::PathBuf,
-    sync::{Arc, Mutex},
 };
 
 use aes::cipher::{block_padding::NoPadding, BlockDecryptMut, KeyIvInit};
 use anyhow::{Ok, Result};
 use hmac::{Hmac, Mac};
 use pbkdf2::pbkdf2_hmac_array;
+use process::Process;
 use rayon::prelude::*;
 use regex::Regex;
 use sha1::Sha1;
 use sha2::Sha512;
-use threadpool::ThreadPool;
 use windows::Win32::{
     Foundation::CloseHandle,
     System::{
@@ -29,7 +29,7 @@ use windows::Win32::{
         Threading::{OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ},
     },
 };
-use yara::{Compiler, Match};
+use yara::Compiler;
 
 use crate::procmem::ProcessMemoryInfo;
 
@@ -55,29 +55,6 @@ const RULES_V3: &str = r#"
 "#;
 
 const RULES_V4: &str = r#"
-    rule GetKeyStubStr
-    {
-        strings:
-            $a0 = "/cgi-bin/micromsg-bin/getfavinfo"
-            $a1 = "DelayJobSchedule@hardlink_manager.cc"
-            $a2 = "AsyncCheckStorage@message_manager.cc"
-            $a3 = "HandleReceiveAddMsgList@message_manager.cc"
-            $a4 = "StartCheckTimer@res_update_manager.cc"
-            $a5 = "StartCheckUpdateTimer@plugin_manager.cc"
-            $a6 = "StartFtsCoroutine@favorite_fts_manager.cc"
-            $a7 = "StartUpdateTimer@xlab_manager.cc"
-            $a8 = "StartHeartbeatService@heartbeat_center.cc"
-            $a9 = "AsyncCheckRevoke@message_revoke_manager.cc"
-            $a10 = "coroutine-operator()@message_manager.cc"
-            $a11 = "OnReceivePush@netcorecallback_implement.cc"
-            $a12 = "coroutine-operator()@login_service.cc"
-            $a13 = "coroutine-operator()@login_context.cc"
-            $a14 = "coroutine-CriticalLogin@login_manager.cc"
-
-        condition:
-            any of them
-    }
-
     rule GetDataDir
     {
         strings:
@@ -150,9 +127,26 @@ key: {}
 fn get_pid_by_name(pname: &str) -> Vec<u32> {
     let mut result = vec![];
     unsafe {
-        for pp in tasklist::Tasklist::new() {
-            if pp.get_pname().trim_end_matches("\x00") == pname {
-                result.push(pp.get_pid());
+        for pp in process::Proclist::new().unwrap() {
+            let pi = pp.get_proc_info().unwrap();
+            if pi.name == pname {
+                result.push(pi.pid);
+            }
+        }
+    }
+
+    result.sort();
+
+    result
+}
+
+fn get_pid_by_name_and_cmd_pattern(pname: &str, cmd_pattern: &str) -> Vec<u32> {
+    let mut result = vec![];
+    unsafe {
+        for pp in process::Proclist::new().unwrap() {
+            let pi = pp.get_proc_info().unwrap();
+            if pi.name == pname && Regex::new(cmd_pattern).unwrap().find(&pi.cmd).is_some() {
+                result.push(pi.pid);
             }
         }
     }
@@ -212,9 +206,12 @@ fn read_bytes(pid: u32, addr: usize, size: usize) -> Result<Vec<u8>> {
 
 fn get_proc_file_version(pid: u32) -> Option<String> {
     unsafe {
-        tasklist::get_proc_file_info(pid)
-            .get("FileVersion")
-            .cloned()
+        Process::new(pid).get_file_info().unwrap();
+        let fi = Process::new(pid).get_file_info().ok();
+        match fi {
+            Some(fi) => fi.get("FileVersion").cloned(),
+            None => None,
+        }
     }
 }
 
@@ -500,6 +497,11 @@ fn dump_wechat_info_v4(
         .next()
         .expect("unable to find phone string");
 
+    let key_memory_info = wechat_writeable_private_mem_infos.iter().find(|v| {
+        v.base == phone_str_match.base
+    }).unwrap();
+    let key_search_range = 0..key_memory_info.base + key_memory_info.region_size;
+
     let nick_name_length = u64::from_le_bytes(phone_str_match.data[..8].try_into().unwrap());
     let phone_str_address = phone_str_match.base + phone_str_match.offset + 0x10;
     let phone_str = read_string(pid, phone_str_address, 11).unwrap();
@@ -546,32 +548,57 @@ fn dump_wechat_info_v4(
         String::from_utf8(data_dir_match.data.clone()).unwrap()
     };
 
-    let key_stub_str_matchs = results
-        .iter()
-        .filter(|x| x.identifier == "GetKeyStubStr")
-        .next()
-        .expect("unbale to find key stub str")
-        .strings
-        .iter()
-        .filter(|x| {
-            x.matches.iter().any(|y| {
-                wechat_writeable_private_mem_infos
-                    .iter()
-                    .any(|z| y.base == z.base)
-            })
-        })
-        .next()
-        .expect("unbale to find key stub str")
-        .matches
-        .iter()
-        .filter(|x| {
-            wechat_writeable_private_mem_infos
-                .iter()
-                .any(|y| x.base == y.base)
-        })
-        .collect::<Vec<&Match>>();
+    let mut compiler = Compiler::new().unwrap();
+    compiler = compiler
+        .add_rules_str(
+            r#"
+rule GetKeyAddrStub
+{
+    strings:
+        $a = /.{6}\x00{2}\x00{8}\x20\x00{7}\x2f\x00{7}/
+    condition:
+        all of them
+}
+    "#,
+        )
+        .expect("rule error");
+    let rules = compiler
+        .compile_rules()
+        .expect("Should have compiled rules");
+    let results = rules.scan_process(pid, 0).expect("Should have scanned");
+    if results.is_empty() {
+        panic!("unable to find key stub str");
+    }
 
-    if key_stub_str_matchs.len() == 0 {
+    let mut key_stub_str_addresses = vec![];
+    for result in results {
+        if let Some(key_stub_str_matches) = result
+            .strings
+            .iter()
+            .filter(|x| {
+                x.matches.iter().any(|y| {
+                    wechat_writeable_private_mem_infos
+                        .iter()
+                        .any(|z| y.base == z.base)
+                })
+            })
+            .next()
+        {
+            let tmp = key_stub_str_matches
+                .matches
+                .iter()
+                .filter(|x| {
+                    wechat_writeable_private_mem_infos
+                        .iter()
+                        .any(|y| x.base == y.base)
+                })
+                .map(|x| u64::from_le_bytes(x.data[..8].try_into().unwrap()))
+                .collect::<Vec<u64>>();
+            key_stub_str_addresses.extend(tmp);
+        }
+    }
+
+    if key_stub_str_addresses.is_empty() {
         panic!("unable to find key stub str");
     }
 
@@ -589,96 +616,88 @@ fn dump_wechat_info_v4(
     let mut buf = [0u8; PAGE_SIZE];
     db_file.read(&mut buf[..]).expect("read biz.db is failed");
 
-    let mut pre_addresses: HashSet<usize> = HashSet::new();
-    for cur_delayjob_match in key_stub_str_matchs {
-        // 向上向下搜，32字节对齐
-        const SEARCH_COUNT: i8 = 15;
-        let cur_offset = cur_delayjob_match.base + cur_delayjob_match.offset;
-        for i in -SEARCH_COUNT..=SEARCH_COUNT {
-            let cur_key_offset = (cur_offset as isize + (KEY_SIZE as isize * i as isize)) as usize;
-
-            if cur_key_offset < cur_delayjob_match.base || cur_key_offset == cur_offset {
-                continue;
+    let mut pre_addresses: HashSet<u64> = HashSet::new();
+    key_stub_str_addresses.sort_by(|a, b| b.cmp(a));
+    for cur_stub_addr in key_stub_str_addresses {
+        if cur_stub_addr < key_search_range.end as _ {
+            if wechat_writeable_private_mem_infos.iter().any(|v| {
+                cur_stub_addr >= v.base as _
+                    && cur_stub_addr <= (v.base + v.region_size - KEY_SIZE) as _
+            }) {
+                pre_addresses.insert(cur_stub_addr);
             }
-
-            pre_addresses.insert(cur_key_offset);
         }
     }
 
     // HMAC_SHA512算法比较耗时，使用多线程跑
-    let max_thread_num = num_cpus::get();
-    let pool = ThreadPool::new(max_thread_num);
     let n_job = pre_addresses.len();
-    let key = Arc::new(Mutex::new(None));
 
-    for i in 0..n_job {
-        let cur_key_offset = pre_addresses.iter().nth(i).unwrap().clone();
-        let key = Arc::clone(&key);
-        let ex_key = Arc::clone(&key);
-        pool.execute(move || {
-            // println!("{:x}", cur_key_offset);
-            let key_bytes =
-                read_bytes(pid, cur_key_offset, KEY_SIZE).expect("find key bytes failed in memory");
-            if key_bytes.iter().filter(|&&x| x == 0x00).count() < 5 {
-                // 验证 key 是否有效
-                let start = SALT_SIZE;
-                let end = PAGE_SIZE;
+    println!("[+] found pre address count: {}", n_job);
+    println!("[+] searching key in pre addresses...");
 
-                // 获取到文件开头的 salt
-                let salt = buf[..SALT_SIZE].to_owned();
-                // salt 异或 0x3a 得到 mac_salt， 用于计算HMAC
-                let mac_salt: Vec<u8> = salt.to_owned().iter().map(|x| x ^ 0x3a).collect();
+    let key_addr = pre_addresses.par_iter().find_any(|&&cur_key_offset| {
+        // println!("{:x}", cur_key_offset);
+        let key_bytes = read_bytes(pid, cur_key_offset as usize, KEY_SIZE).expect(&format!(
+            "find key bytes failed in memory: {:X}",
+            cur_key_offset
+        ));
+        if key_bytes.iter().filter(|&&x| x == 0x00).count() == 0 {
+            // 验证 key 是否有效
+            let start = SALT_SIZE;
+            let end = PAGE_SIZE;
 
-                // 通过 key_bytes 和 salt 迭代 ROUND_COUNT 次解出一个新的 key，用于解密
-                let new_key = pbkdf2_hmac_array::<Sha512, KEY_SIZE>(&key_bytes, &salt, ROUND_COUNT);
+            // 获取到文件开头的 salt
+            let salt = buf[..SALT_SIZE].to_owned();
+            // salt 异或 0x3a 得到 mac_salt， 用于计算HMAC
+            let mac_salt: Vec<u8> = salt.to_owned().iter().map(|x| x ^ 0x3a).collect();
 
-                // 通过 key 和 mac_salt 迭代 2 次解出 mac_key
-                let mac_key = pbkdf2_hmac_array::<Sha512, KEY_SIZE>(&new_key, &mac_salt, 2);
-                // let real_key = [&mac_key, &mac_salt[..]].concat(); // sqlcipher_rawkey
+            // 通过 key_bytes 和 salt 迭代 ROUND_COUNT 次解出一个新的 key，用于解密
+            let new_key = pbkdf2_hmac_array::<Sha512, KEY_SIZE>(&key_bytes, &salt, ROUND_COUNT);
 
-                // hash检验码对齐后长度 48，后面校验哈希用
-                let mut reserve = IV_SIZE + HMAC_SHA512_SIZE;
-                reserve = if (reserve % AES_BLOCK_SIZE) == 0 {
-                    reserve
-                } else {
-                    ((reserve / AES_BLOCK_SIZE) + 1) * AES_BLOCK_SIZE
-                };
+            // 通过 key 和 mac_salt 迭代 2 次解出 mac_key
+            let mac_key = pbkdf2_hmac_array::<Sha512, KEY_SIZE>(&new_key, &mac_salt, 2);
+            // let real_key = [&mac_key, &mac_salt[..]].concat(); // sqlcipher_rawkey
 
-                // 校验哈希
-                type HamcSha512 = Hmac<Sha512>;
+            // hash检验码对齐后长度 48，后面校验哈希用
+            let mut reserve = IV_SIZE + HMAC_SHA512_SIZE;
+            reserve = if (reserve % AES_BLOCK_SIZE) == 0 {
+                reserve
+            } else {
+                ((reserve / AES_BLOCK_SIZE) + 1) * AES_BLOCK_SIZE
+            };
 
-                unsafe {
-                    let mut mac = HamcSha512::new_from_slice(&mac_key)
-                        .expect("hmac_sha512 error, key length is invalid");
-                    mac.update(&buf[start..end - reserve + IV_SIZE]);
-                    mac.update(std::mem::transmute::<_, &[u8; 4]>(&(1u32)).as_ref()); // pageno
-                    let hash_mac = mac.finalize().into_bytes().to_vec();
+            // 校验哈希
+            type HamcSha512 = Hmac<Sha512>;
 
-                    let hash_mac_start_offset = end - reserve + IV_SIZE;
-                    let hash_mac_end_offset = hash_mac_start_offset + hash_mac.len();
-                    if hash_mac == &buf[hash_mac_start_offset..hash_mac_end_offset] {
-                        let mut key = key.lock().unwrap();
-                        if key.is_none() {
-                            // println!("found key at 0x{:x}", cur_key_offset);
-                            *key = Some(hex::encode(key_bytes));
-                            // println!("key is {}", (*key).clone().unwrap());
-                        }
-                    }
+            unsafe {
+                let mut mac = HamcSha512::new_from_slice(&mac_key)
+                    .expect("hmac_sha512 error, key length is invalid");
+                mac.update(&buf[start..end - reserve + IV_SIZE]);
+                mac.update(std::mem::transmute::<_, &[u8; 4]>(&(1u32)).as_ref()); // pageno
+                let hash_mac = mac.finalize().into_bytes().to_vec();
+
+                let hash_mac_start_offset = end - reserve + IV_SIZE;
+                let hash_mac_end_offset = hash_mac_start_offset + hash_mac.len();
+                if hash_mac == &buf[hash_mac_start_offset..hash_mac_end_offset] {
+                    println!("[v] found key at 0x{:x}", cur_key_offset);
+                    // let key = hex::encode(key_bytes);
+                    // println!("key is {}", key);
+                    return true;
+                    // }
                 }
             }
-        });
-
-        if ex_key.lock().unwrap().is_some() {
-            break;
         }
-    }
+        return false;
+    });
 
-    pool.join();
-
-    let key = key.lock().unwrap();
+    let mut key = key_addr.map(|&v| {
+        let key_bytes = read_bytes(pid, v as _, KEY_SIZE).unwrap();
+        hex::encode(key_bytes)
+    });
 
     if key.is_none() {
-        panic!("not found key!!");
+        eprintln!("[!] no found key!!");
+        key = Some("unknown".to_owned());
     }
 
     WechatInfo {
@@ -965,7 +984,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.10")
+        .version("1.0.11")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
@@ -986,7 +1005,7 @@ fn cli() -> clap::Command {
         )
         .arg(arg!(-a --all "dump key and decrypt db files"))
         .arg(
-            arg!(-v <VERSION> "decrypt 4.0 db files")
+            arg!(--vv <VERSION> "wechat db file version")
                 .value_parser(["3", "4"])
                 .default_value("4"),
         )
@@ -1015,7 +1034,7 @@ fn main() {
         (None, None, None) => {
             let pids = [
                 get_pid_by_name("WeChat.exe"),
-                get_pid_by_name("Weixin.exe").into_iter().take(1).collect(),
+                get_pid_by_name_and_cmd_pattern("Weixin.exe", r#"Weixin\.exe"?\s*$"#),
             ]
             .concat();
             for pid in pids {
@@ -1043,7 +1062,7 @@ fn main() {
             if !file.exists() {
                 panic!("the target file does not exist");
             }
-            let is_v4 = if matches.get_one::<String>("v").unwrap() == "4" {
+            let is_v4 = if matches.get_one::<String>("vv").unwrap() == "4" {
                 true
             } else {
                 false

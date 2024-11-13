@@ -10,7 +10,7 @@
 ## 工具用法
 
 ```bash
-wechat-dump-rs (1.0.10) - REinject
+wechat-dump-rs (1.0.11) - REinject
 A wechat db dump tool
 Options:
   -p, --pid <PID>        pid of wechat
@@ -19,7 +19,7 @@ Options:
   -d, --data-dir <PATH>  special wechat data dir path (pid is required)
   -o, --output <PATH>    decrypted database output path
   -a, --all              dump key and decrypt db files
-  -v <VERSION>           decrypt 4.0 db files [default: 4] [possible values: 3, 4]
+      --vv <VERSION>     wechat db file version [default: 4] [possible values: 3, 4]
   -h, --help             Print help
 ```
 
