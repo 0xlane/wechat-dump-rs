@@ -87,7 +87,7 @@ wechat-dump-rs.exe -k xxxxxxxxxxxxxxxxx -f c:\users\xxxx\xxxx\contact.db -r -vv 
 
 ## 库表结构
 
-[4.0.0.26](docs/wechat_4_0_0_26_table_struct.md)
+- [4.0.0.26](docs/wechat_4_0_0_26_table_struct.md)
 
 ## 微信分析记录
 
