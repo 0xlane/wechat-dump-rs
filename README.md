@@ -85,6 +85,10 @@ wechat-dump-rs.exe -k xxxxxxxxxxxxxxxxx -f c:\users\xxxx\xxxx\contact.db -r -vv 
 - 4.0.0.26
 - 4.0.0.32
 
+## 库表结构
+
+[4.0.0.26](docs/wechat_4_0_0_26_table_struct.md)
+
 ## 如何手动寻找偏移
 
 **微信4.0分析在 [wechat_4_0_analysis](docs/wechat_4_0_analysis.md)**
