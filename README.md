@@ -5,12 +5,12 @@
 > **可能存在封号风险，后果自负！！！**
 >
 > **使用需知**：
-> 微信4.0 重构后改用 HMAC_SHA512 算法，寻找 key 的方式和 v3 不同，工具内仍然采用内存暴力搜索的方式，对于 v4 解密时将使用多线程加速，会导致 cpu 飙到 100%，等后期优化下，介意勿用！！
+> 微信4.0 重构后改用 HMAC_SHA512 算法，寻找 key 的方式和 v3 不同，工具内仍然采用内存暴力搜索的方式，对于 v4 解密时将使用多线程加速，可能会导致 cpu 飙到 100%，取决于 key 离起始查找点的距离。
 
 ## 工具用法
 
 ```bash
-wechat-dump-rs (1.0.11) - REinject
+wechat-dump-rs (1.0.13) - REinject
 A wechat db dump tool
 Options:
   -p, --pid <PID>        pid of wechat
@@ -20,6 +20,7 @@ Options:
   -o, --output <PATH>    decrypted database output path
   -a, --all              dump key and decrypt db files
       --vv <VERSION>     wechat db file version [default: 4] [possible values: 3, 4]
+  -r, --rawkey           convert db key to sqlcipher raw key (file is required)
   -h, --help             Print help
 ```
 
@@ -38,6 +39,24 @@ key: f11fd83bxxxxxx4f3f4x4ddxxxxxe417696b4axx19e09489ad48c
 ```
 
 使用参数 `-a` 可以直接导出所有数据库文件。
+
+### 使用 sqlcipher browser 浏览数据库
+
+工具目前对稍微大点的库文件解密后可能存在畸形问题，建议使用 [DB Browser for SQLCipher](https://sqlitebrowser.org/) 进行浏览。
+
+打开 sqlcipher 数据库时，选择 “原始密钥”，微信 V3 选择 sqlcipher3，V4 选择 sqlcipher4，每个数据库文件对应的原始密钥都是不一样的，获取方式如下：
+
+微信 V3 数据库文件 rawkey：
+
+```bash
+wechat-dump-rs.exe -k xxxxxxxxxxxxxxxxx -f c:\users\xxxx\xxxx\contact.db -r -vv 3
+```
+
+微信 V4 数据库文件 rawkey：
+
+```bash
+wechat-dump-rs.exe -k xxxxxxxxxxxxxxxxx -f c:\users\xxxx\xxxx\contact.db -r -vv 4
+```
 
 ## 原理
 
@@ -64,6 +83,7 @@ key: f11fd83bxxxxxx4f3f4x4ddxxxxxe417696b4axx19e09489ad48c
 - 3.9.12.15
 - 3.9.12.17
 - 4.0.0.26
+- 4.0.0.32
 
 ## 如何手动寻找偏移
 

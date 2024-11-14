@@ -934,6 +934,26 @@ fn decrypt_db_file_v4(path: &PathBuf, pkey: &String) -> Result<Vec<u8>> {
     Ok(decrypted_buf)
 }
 
+fn convert_to_sqlcipher_rawkey(pkey: &str, path: &PathBuf, is_v4: bool) -> Result<String> {
+    const KEY_SIZE: usize = 32;
+    const ROUND_COUNT_V4: u32 = 256000;
+    const ROUND_COUNT_V3: u32 = 64000;
+    const SALT_SIZE: usize = 16;
+
+    let mut file = File::open(path)?;
+    let mut salt = vec![0; SALT_SIZE];
+    file.read(salt.as_mut())?;
+
+    let pass = hex::decode(pkey)?;
+    let key = if is_v4 {
+        pbkdf2_hmac_array::<Sha512, KEY_SIZE>(&pass, &salt, ROUND_COUNT_V4)
+    } else {
+        pbkdf2_hmac_array::<Sha1, KEY_SIZE>(&pass, &salt, ROUND_COUNT_V3)
+    };
+    let rawkey = [key.as_slice(), &salt].concat();
+    Ok(format!("0x{}", hex::encode(rawkey)))
+}
+
 fn dump_all_by_pid(wechat_info: &WechatInfo, output: &PathBuf) {
     let msg_dir = if wechat_info.version.starts_with("4.0") {
         wechat_info.data_dir.clone() + "db_storage"
@@ -990,7 +1010,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.12")
+        .version("1.0.13")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
@@ -1015,6 +1035,7 @@ fn cli() -> clap::Command {
                 .value_parser(["3", "4"])
                 .default_value("4"),
         )
+        .arg(arg!(-r --rawkey "convert db key to sqlcipher raw key (file is required)"))
 }
 
 fn main() {
@@ -1068,11 +1089,26 @@ fn main() {
             if !file.exists() {
                 panic!("the target file does not exist");
             }
+
             let is_v4 = if matches.get_one::<String>("vv").unwrap() == "4" {
                 true
             } else {
                 false
             };
+
+            // convert db key to sqlcipher rawkey
+            let b_rawkey = matches.get_flag("rawkey");
+            if b_rawkey {
+                if file.is_dir() {
+                    panic!("the target file is a directory.");
+                }
+
+                let rawkey = convert_to_sqlcipher_rawkey(&key, &file, is_v4).unwrap();
+                println!("{}", rawkey);
+
+                return;
+            }
+            // convert end
 
             match file.is_dir() {
                 true => {
