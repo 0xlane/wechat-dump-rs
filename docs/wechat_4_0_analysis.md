@@ -2,11 +2,11 @@
 
 要定位 key 的位置之前肯定先要找到真实的 key ，下面简单记录一下寻找过程。使用微信版本 4.0.0.26 进行分析。
 
-数据文档存储位置发生变化：C:\Users\xxx\Documents\xwechat_files\wxid_xxxxx\db_storage，且不可修改。
+数据文档存储位置发生变化：`C:\Users\xxx\Documents\xwechat_files\wxid_xxxxx\db_storage`，且不可修改。
 
 进程名从 Wechat.exe 变化为 Weixin.exe，关键 DLL 从 WeChatWin.dll 变化为 Weixin.dll，微信将很多库静态编译成这1个文件所以很大，IDA打开都要解析很久才行。
 
-先说一下取巧的简单办法，根据之前版本微信找 key 经验，可以使用 CE 在内存中搜索 SetDBKey 就可以定位到一个日志打印的位置，这个位置所在的函数就是 SetDBKey 函数，第二个参数就是 key 指针。（ps：可以观察一下指针周围有什么可以用于定位的特征）
+先说一下取巧的简单办法，根据之前版本微信找 key 经验，可以使用 CE 在内存中搜索 `SetDBKey` 就可以定位到一个日志打印的位置，这个位置所在的函数就是 `SetDBKey` 函数，第二个参数就是 key 指针。（ps：可以观察一下指针周围有什么可以用于定位的特征）
 
 下面说复杂方法，因为微信使用的是 [WCDB](https://github.com/Tencent/wcdb/)，WCDB 算是 sqlcipher 和 sqlite 定制，所以根据 [https://github.com/Tencent/wcdb/wiki/C++-加密与配置](https://github.com/Tencent/wcdb/wiki/C++-加密与配置) 可知微信内部应该需要调用 `setCipherKey` 进行加密配置，所以如果能定位到这个函数就可以找到 key。
 
