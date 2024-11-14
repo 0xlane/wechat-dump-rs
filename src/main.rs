@@ -67,7 +67,7 @@ const RULES_V4: &str = r#"
     rule GetPhoneNumberOffset
     {
         strings:
-            $a = /[\x04-\x30]\x00{7}\x0f\x00{7}[0-9]{11}\x00{5}\x0b\x00{7}\x0f\x00{7}/
+            $a = /[\x01-\x20]\x00{7}\x0f\x00{7}[0-9]{11}\x00{5}\x0b\x00{7}\x0f\x00{7}/
         condition:
             $a
     }
@@ -1010,7 +1010,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.13")
+        .version("1.0.14")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
