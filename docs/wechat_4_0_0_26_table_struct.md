@@ -2,6 +2,15 @@
 
 > 基于微信 4.0.0.26
 
+## login
+
+### key_info.db
+
+```sql
+CREATE TABLE LoginKeyInfoTable(user_name_md5 TEXT, key_md5 TEXT, key_info_md5 TEXT, key_info_data BLOB)
+CREATE UNIQUE INDEX LoginKeyInfoTable_USER_KEYINFO ON LoginKeyInfoTable(user_name_md5, key_info_md5)
+```
+
 ## biz
 
 ### biz.db
