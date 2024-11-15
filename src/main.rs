@@ -206,7 +206,6 @@ fn read_bytes(pid: u32, addr: usize, size: usize) -> Result<Vec<u8>> {
 
 fn get_proc_file_version(pid: u32) -> Option<String> {
     unsafe {
-        Process::new(pid).get_file_info().unwrap();
         let fi = Process::new(pid).get_file_info().ok();
         match fi {
             Some(fi) => fi.get("FileVersion").cloned(),

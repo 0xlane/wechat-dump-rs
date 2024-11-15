@@ -2,12 +2,12 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use anyhow::{anyhow, Context, Result};
 use windows::{
-    core::PSTR,
+    core::PWSTR,
     Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation},
     Win32::{
         Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE, MAX_PATH},
         Storage::FileSystem::{
-            GetFileVersionInfoExA, GetFileVersionInfoSizeExA, FILE_VER_GET_LOCALISED,
+            GetFileVersionInfoExW, GetFileVersionInfoSizeExW, FILE_VER_GET_LOCALISED
         },
         System::{
             Diagnostics::{
@@ -18,9 +18,7 @@ use windows::{
                 },
             },
             Threading::{
-                OpenProcess, QueryFullProcessImageNameA, PEB, PROCESS_ACCESS_RIGHTS,
-                PROCESS_BASIC_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-                PROCESS_VM_READ, RTL_USER_PROCESS_PARAMETERS,
+                OpenProcess, QueryFullProcessImageNameW, PEB, PROCESS_ACCESS_RIGHTS, PROCESS_BASIC_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ, RTL_USER_PROCESS_PARAMETERS
             },
         },
     },
@@ -56,11 +54,11 @@ impl Process {
 
         // Get pname/fullexepath
         let mut exe_len = MAX_PATH;
-        let mut exe = [0; MAX_PATH as _];
-        QueryFullProcessImageNameA(
+        let mut exe = [0u16; MAX_PATH as _];
+        QueryFullProcessImageNameW(
             *self._inner_handle.borrow(),
             PROCESS_NAME_WIN32,
-            PSTR::from_raw(exe.as_mut_ptr()),
+            PWSTR::from_raw(exe.as_mut_ptr()),
             &mut exe_len,
         )
         .with_context(|| {
@@ -70,7 +68,7 @@ impl Process {
                 GetLastError().0
             )
         })?;
-        let exe = String::from_utf8(exe.to_vec())
+        let exe = String::from_utf16(&exe)
             .with_context(|| "Failed to convert win32 path to string.")?;
         let exe = exe.trim_matches('\x00').to_owned();
         let name = exe
@@ -169,12 +167,12 @@ impl Process {
 
         let mut temp: u32 = 0;
 
-        let mut exe = pi.exe.as_bytes().to_vec();
+        let mut exe = pi.exe.encode_utf16().collect::<Vec<u16>>();
         exe.push(0x00);
 
-        let len = GetFileVersionInfoSizeExA(
+        let len = GetFileVersionInfoSizeExW(
             FILE_VER_GET_LOCALISED,
-            PSTR(exe.as_mut_ptr()),
+            PWSTR(exe.as_mut_ptr()),
             &mut temp,
         );
         if len == 0 {
@@ -185,11 +183,11 @@ impl Process {
             )));
         }
 
-        let mut addr = vec![0u16; len as usize];
+        let mut addr = vec![0u16; len as usize / 2 + 1];
         let mut hash: HashMap<String, String> = HashMap::new();
-        match GetFileVersionInfoExA(
+        match GetFileVersionInfoExW(
             FILE_VER_GET_LOCALISED,
-            PSTR(exe.as_mut_ptr()),
+            PWSTR(exe.as_mut_ptr()),
             0,
             len,
             addr.as_mut_ptr() as _,
