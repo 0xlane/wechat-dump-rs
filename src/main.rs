@@ -10,7 +10,7 @@ use std::{
 };
 
 use aes::cipher::{block_padding::NoPadding, BlockDecryptMut, KeyIvInit};
-use anyhow::{Ok, Result};
+use anyhow::Result;
 use hmac::{Hmac, Mac};
 use pbkdf2::pbkdf2_hmac_array;
 use process::Process;
@@ -67,7 +67,7 @@ const RULES_V4: &str = r#"
     rule GetPhoneNumberOffset
     {
         strings:
-            $a = /[\x01-\x20]\x00{7}\x0f\x00{7}[0-9]{11}\x00{5}\x0b\x00{7}\x0f\x00{7}/
+            $a = /[\x01-\x20]\x00{7}(\x0f|\x1f)\x00{7}[0-9]{11}\x00{5}\x0b\x00{7}\x0f\x00{7}/
         condition:
             $a
     }
@@ -187,6 +187,16 @@ fn read_string(pid: u32, addr: usize, size: usize) -> Result<String> {
         match buffer.iter().position(|&x| x == 0) {
             Some(pos) => Ok(String::from_utf8(buffer[..pos].to_vec())?),
             None => Ok(String::from_utf8(buffer)?),
+        }
+    }
+}
+
+fn read_string_or_ptr(pid: u32, addr: usize, size: usize) -> Result<String> {
+    match read_string(pid, addr, size) {
+        Ok(ss) => Ok(ss),
+        Err(_) => {
+            let str_ptr = read_number::<usize>(pid, addr)?;
+            Ok(read_string(pid, str_ptr, size)?)
         }
     }
 }
@@ -496,20 +506,21 @@ fn dump_wechat_info_v4(
         .next()
         .expect("unable to find phone string");
 
-    let key_memory_info = wechat_writeable_private_mem_infos
-        .iter()
-        .find(|v| v.base == phone_str_match.base)
-        .unwrap();
-    let key_search_range = 0..key_memory_info.base + key_memory_info.region_size;
+    // let key_memory_info = wechat_writeable_private_mem_infos
+    //     .iter()
+    //     .find(|v| v.base == phone_str_match.base)
+    //     .unwrap();
+    // let key_search_range = 0..key_memory_info.base + key_memory_info.region_size;
 
     let nick_name_length = u64::from_le_bytes(phone_str_match.data[..8].try_into().unwrap());
     let phone_str_address = phone_str_match.base + phone_str_match.offset + 0x10;
     let phone_str = read_string(pid, phone_str_address, 11).unwrap();
-    let nick_name = read_string(pid, phone_str_address - 0x20, nick_name_length as usize).unwrap();
+    let nick_name =
+        read_string_or_ptr(pid, phone_str_address - 0x20, nick_name_length as usize).unwrap();
 
     let account_name_length = read_number::<u64>(pid, phone_str_address - 0x30).unwrap();
     let account_name =
-        read_string(pid, phone_str_address - 0x40, account_name_length as _).unwrap();
+        read_string_or_ptr(pid, phone_str_address - 0x40, account_name_length as _).unwrap();
 
     let data_dir = if special_data_dir.is_some() {
         special_data_dir
@@ -545,7 +556,9 @@ fn dump_wechat_info_v4(
             .next()
             .expect("unable to find data dir");
 
-        String::from_utf8(data_dir_match.data.clone()).unwrap().replace("db_storage\\", "")
+        String::from_utf8(data_dir_match.data.clone())
+            .unwrap()
+            .replace("db_storage\\", "")
     };
 
     let mut compiler = Compiler::new().unwrap();
@@ -598,7 +611,23 @@ rule GetKeyAddrStub
         }
     }
 
-    if key_stub_str_addresses.is_empty() {
+    let mut pre_addresses: HashSet<u64> = HashSet::new();
+    key_stub_str_addresses.sort_by(|&a, &b| {
+        a.abs_diff(phone_str_address as _)
+            .cmp(&b.abs_diff(phone_str_address as _))
+    });
+    for cur_stub_addr in key_stub_str_addresses {
+        // if cur_stub_addr < key_search_range.end as _ {
+        if wechat_writeable_private_mem_infos.iter().any(|v| {
+            cur_stub_addr >= v.base as _
+                && cur_stub_addr <= (v.base + v.region_size - KEY_SIZE) as _
+        }) {
+            pre_addresses.insert(cur_stub_addr);
+        }
+        // }
+    }
+
+    if pre_addresses.is_empty() {
         panic!("unable to find key stub str");
     }
 
@@ -615,22 +644,6 @@ rule GetKeyAddrStub
         .expect(format!("{} is not exsit", &db_file_path).as_str());
     let mut buf = [0u8; PAGE_SIZE];
     db_file.read(&mut buf[..]).expect("read biz.db is failed");
-
-    let mut pre_addresses: HashSet<u64> = HashSet::new();
-    key_stub_str_addresses.sort_by(|&a, &b| {
-        a.abs_diff(phone_str_address as _)
-            .cmp(&b.abs_diff(phone_str_address as _))
-    });
-    for cur_stub_addr in key_stub_str_addresses {
-        if cur_stub_addr < key_search_range.end as _ {
-            if wechat_writeable_private_mem_infos.iter().any(|v| {
-                cur_stub_addr >= v.base as _
-                    && cur_stub_addr <= (v.base + v.region_size - KEY_SIZE) as _
-            }) {
-                pre_addresses.insert(cur_stub_addr);
-            }
-        }
-    }
 
     // HMAC_SHA512算法比较耗时，使用多线程跑
     let n_job = pre_addresses.len();
@@ -1009,7 +1022,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.15")
+        .version("1.0.16")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
