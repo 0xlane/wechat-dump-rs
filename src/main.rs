@@ -58,7 +58,7 @@ const RULES_V4: &str = r#"
     rule GetDataDir
     {
         strings:
-            $a = /[a-zA-Z]:\\(.{1,100}?\\){0,1}?xwechat_files\\wxid_[0-9a-zA-Z_-]{14,19}?\\/
+            $a = /[a-zA-Z]:\\(.{1,100}?\\){0,1}?xwechat_files\\[0-9a-zA-Z_-]{6,24}?\\db_storage\\/
         
         condition:
             $a
@@ -546,7 +546,7 @@ fn dump_wechat_info_v4(
             .next()
             .expect("unable to find data dir");
 
-        String::from_utf8(data_dir_match.data.clone()).unwrap()
+        String::from_utf8(data_dir_match.data.clone()).unwrap().replace("db_storage\\", "")
     };
 
     let mut compiler = Compiler::new().unwrap();
