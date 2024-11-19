@@ -12,6 +12,7 @@ use std::{
 use aes::cipher::{block_padding::NoPadding, BlockDecryptMut, KeyIvInit};
 use anyhow::Result;
 use hmac::{Hmac, Mac};
+use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use pbkdf2::pbkdf2_hmac_array;
 use process::Process;
 use rayon::prelude::*;
@@ -651,64 +652,76 @@ rule GetKeyAddrStub
     println!("[+] found pre address count: {}", n_job);
     println!("[+] searching key in pre addresses...");
 
-    let key_addr = pre_addresses.par_iter().find_any(|&&cur_key_offset| {
-        // println!("{:x}", cur_key_offset);
-        let key_bytes = read_bytes(pid, cur_key_offset as usize, KEY_SIZE).expect(&format!(
-            "find key bytes failed in memory: {:X}",
-            cur_key_offset
-        ));
-        if key_bytes.iter().filter(|&&x| x <= 127).count() < 20
-            && key_bytes.iter().filter(|&&x| x == 0).count() < 2
-        {
-            // 验证 key 是否有效
-            let start = SALT_SIZE;
-            let end = PAGE_SIZE;
+    let mp = MultiProgress::new();
+    let progress_style = ProgressStyle::with_template("{prefix:.bold.dim} {wide_msg}").unwrap();
 
-            // 获取到文件开头的 salt
-            let salt = buf[..SALT_SIZE].to_owned();
-            // salt 异或 0x3a 得到 mac_salt， 用于计算HMAC
-            let mac_salt: Vec<u8> = salt.to_owned().iter().map(|x| x ^ 0x3a).collect();
+    let key_addr = pre_addresses
+        .into_iter()
+        .par_bridge()
+        .find_any(|&cur_key_offset| {
+            // println!("{:x}", cur_key_offset);
+            let pb = mp.add(ProgressBar::new(3));
+            pb.set_style(progress_style.clone());
+            pb.set_prefix(format!("[v]"));
+            pb.set_message(format!("read bytes from 0x{cur_key_offset:x}..."));
+            let key_bytes = read_bytes(pid, cur_key_offset as usize, KEY_SIZE).expect(&format!(
+                "find key bytes failed in memory: {:X}",
+                cur_key_offset
+            ));
+            if key_bytes.iter().filter(|&&x| x <= 127).count() < 20
+                && key_bytes.iter().filter(|&&x| x == 0).count() < 2
+            {
+                // 验证 key 是否有效
+                let start = SALT_SIZE;
+                let end = PAGE_SIZE;
 
-            // 通过 key_bytes 和 salt 迭代 ROUND_COUNT 次解出一个新的 key，用于解密
-            let new_key = pbkdf2_hmac_array::<Sha512, KEY_SIZE>(&key_bytes, &salt, ROUND_COUNT);
+                // 获取到文件开头的 salt
+                let salt = buf[..SALT_SIZE].to_owned();
+                // salt 异或 0x3a 得到 mac_salt， 用于计算HMAC
+                let mac_salt: Vec<u8> = salt.to_owned().iter().map(|x| x ^ 0x3a).collect();
 
-            // 通过 key 和 mac_salt 迭代 2 次解出 mac_key
-            let mac_key = pbkdf2_hmac_array::<Sha512, KEY_SIZE>(&new_key, &mac_salt, 2);
-            // let real_key = [&mac_key, &mac_salt[..]].concat(); // sqlcipher_rawkey
+                // 通过 key_bytes 和 salt 迭代 ROUND_COUNT 次解出一个新的 key，用于解密
+                let new_key = pbkdf2_hmac_array::<Sha512, KEY_SIZE>(&key_bytes, &salt, ROUND_COUNT);
 
-            // hash检验码对齐后长度 48，后面校验哈希用
-            let mut reserve = IV_SIZE + HMAC_SHA512_SIZE;
-            reserve = if (reserve % AES_BLOCK_SIZE) == 0 {
-                reserve
-            } else {
-                ((reserve / AES_BLOCK_SIZE) + 1) * AES_BLOCK_SIZE
-            };
+                // 通过 key 和 mac_salt 迭代 2 次解出 mac_key
+                let mac_key = pbkdf2_hmac_array::<Sha512, KEY_SIZE>(&new_key, &mac_salt, 2);
+                // let real_key = [&mac_key, &mac_salt[..]].concat(); // sqlcipher_rawkey
 
-            // 校验哈希
-            type HamcSha512 = Hmac<Sha512>;
+                // hash检验码对齐后长度 48，后面校验哈希用
+                let mut reserve = IV_SIZE + HMAC_SHA512_SIZE;
+                reserve = if (reserve % AES_BLOCK_SIZE) == 0 {
+                    reserve
+                } else {
+                    ((reserve / AES_BLOCK_SIZE) + 1) * AES_BLOCK_SIZE
+                };
 
-            unsafe {
-                let mut mac = HamcSha512::new_from_slice(&mac_key)
-                    .expect("hmac_sha512 error, key length is invalid");
-                mac.update(&buf[start..end - reserve + IV_SIZE]);
-                mac.update(std::mem::transmute::<_, &[u8; 4]>(&(1u32)).as_ref()); // pageno
-                let hash_mac = mac.finalize().into_bytes().to_vec();
+                // 校验哈希
+                pb.set_message(format!("verify hmac..."));
+                type HamcSha512 = Hmac<Sha512>;
 
-                let hash_mac_start_offset = end - reserve + IV_SIZE;
-                let hash_mac_end_offset = hash_mac_start_offset + hash_mac.len();
-                if hash_mac == &buf[hash_mac_start_offset..hash_mac_end_offset] {
-                    println!("[v] found key at 0x{:x}", cur_key_offset);
-                    // let key = hex::encode(key_bytes);
-                    // println!("key is {}", key);
-                    return true;
-                    // }
+                unsafe {
+                    let mut mac = HamcSha512::new_from_slice(&mac_key)
+                        .expect("hmac_sha512 error, key length is invalid");
+                    mac.update(&buf[start..end - reserve + IV_SIZE]);
+                    mac.update(std::mem::transmute::<_, &[u8; 4]>(&(1u32)).as_ref()); // pageno
+                    let hash_mac = mac.finalize().into_bytes().to_vec();
+
+                    let hash_mac_start_offset = end - reserve + IV_SIZE;
+                    let hash_mac_end_offset = hash_mac_start_offset + hash_mac.len();
+                    if hash_mac == &buf[hash_mac_start_offset..hash_mac_end_offset] {
+                        pb.finish_with_message(format!("found key at 0x{cur_key_offset:x}"));
+                        // let key = hex::encode(key_bytes);
+                        // println!("key is {}", key);
+                        return true;
+                        // }
+                    }
                 }
             }
-        }
-        return false;
-    });
+            pb.finish_and_clear();
+            return false;
+        });
 
-    let mut key = key_addr.map(|&v| {
+    let mut key = key_addr.map(|v| {
         let key_bytes = read_bytes(pid, v as _, KEY_SIZE).unwrap();
         hex::encode(key_bytes)
     });
@@ -741,20 +754,37 @@ fn dump_wechat_info(pid: u32, special_data_dir: Option<&PathBuf>) -> WechatInfo 
 }
 
 fn scan_db_files(dir: String) -> Result<Vec<PathBuf>> {
-    let mut result = vec![];
+    let spinner_style = ProgressStyle::with_template("{spinner} {wide_msg}")
+        .unwrap()
+        .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
+    let pb = ProgressBar::new(!0);
+    pb.set_style(spinner_style);
 
-    for entry in fs::read_dir(dir)?.filter_map(Result::ok) {
-        let path = entry.path();
-        if path.is_dir() {
-            result.extend(scan_db_files(path.to_str().unwrap().to_string())?);
-        } else if let Some(ext) = path.extension() {
-            if ext == "db" {
-                result.push(path);
+    fn scan_file(pb: &ProgressBar, dir: PathBuf) -> Result<Vec<PathBuf>> {
+        let mut result = vec![];
+
+        let entries = fs::read_dir(dir)?
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+        for entry in entries {
+            let path = entry.path();
+            if path.is_dir() {
+                result.extend(scan_file(pb, path)?);
+            } else if let Some(ext) = path.extension() {
+                if ext == "db" {
+                    pb.set_message(path.display().to_string());
+                    pb.tick();
+                    result.push(path);
+                }
             }
         }
+
+        Ok(result)
     }
 
-    Ok(result)
+    let result = scan_file(&pb, dir.into());
+    pb.finish_and_clear();
+    result
 }
 
 fn read_file_content(path: &PathBuf) -> Result<Vec<u8>> {
@@ -973,12 +1003,11 @@ fn dump_all_by_pid(wechat_info: &WechatInfo, output: &PathBuf) {
         wechat_info.data_dir.clone() + "Msg"
     };
     let dbfiles = scan_db_files(msg_dir.clone()).unwrap();
-    println!("scanned {} files in {}", dbfiles.len(), &msg_dir);
-    println!("decryption in progress, please wait...");
+    println!("[+] scanned {} files in {}", dbfiles.len(), &msg_dir);
 
     // 创建输出目录
     if output.is_file() {
-        panic!("the output path must be a directory");
+        panic!("[!] the output path must be a directory");
     }
     let output_dir = PathBuf::from(format!(
         "{}\\wechat_{}",
@@ -989,7 +1018,16 @@ fn dump_all_by_pid(wechat_info: &WechatInfo, output: &PathBuf) {
         std::fs::create_dir_all(&output_dir).unwrap();
     }
 
+    let progress_stype = ProgressStyle::with_template("{prefix:.bold.dim} {spinner} {wide_msg}")
+        .unwrap()
+        .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ");
+    let pb = ProgressBar::new(dbfiles.len() as _);
+    pb.set_style(progress_stype);
+
     dbfiles.par_iter().for_each(|dbfile| {
+        pb.inc(1);
+        pb.set_prefix(format!("[{}/?]", pb.position()));
+        pb.set_message(format!("decrypting: {}", dbfile.display().to_string()));
         let mut db_file_dir = PathBuf::new();
         let mut dest = PathBuf::new();
         db_file_dir.push(&output_dir);
@@ -1013,8 +1051,8 @@ fn dump_all_by_pid(wechat_info: &WechatInfo, output: &PathBuf) {
             std::fs::write(dest, decrypt_db_file_v3(&dbfile, &wechat_info.key).unwrap()).unwrap();
         }
     });
-    println!("decryption complete!!");
-    println!("output to {}", output_dir.to_str().unwrap());
+    pb.finish_with_message("decryption complete!!");
+    println!("[+] output to {}", output_dir.to_str().unwrap());
     println!();
 }
 
@@ -1078,23 +1116,25 @@ fn main() {
             .concat();
             for pid in pids {
                 let wechat_info = dump_wechat_info(pid, None);
-                println!("{}", wechat_info);
-                println!();
 
                 // 需要对所有db文件进行解密
                 if all {
                     dump_all_by_pid(&wechat_info, &output);
+                } else {
+                    println!("{}", wechat_info);
+                    println!();
                 }
             }
         }
         (Some(&pid), None, None) => {
             let wechat_info = dump_wechat_info(pid, data_dir_option);
-            println!("{}", wechat_info);
-            println!();
 
             // 需要对所有db文件进行解密
             if all {
                 dump_all_by_pid(&wechat_info, &output);
+            } else {
+                println!("{}", wechat_info);
+                println!();
             }
         }
         (None, Some(key), Some(file)) => {
