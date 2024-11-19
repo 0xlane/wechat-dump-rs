@@ -185,9 +185,15 @@ fn read_string(pid: u32, addr: usize, size: usize) -> Result<String> {
 
         CloseHandle(hprocess)?;
 
-        match buffer.iter().position(|&x| x == 0) {
-            Some(pos) => Ok(String::from_utf8(buffer[..pos].to_vec())?),
-            None => Ok(String::from_utf8(buffer)?),
+        let buf_str = match buffer.iter().position(|&x| x == 0) {
+            Some(pos) => String::from_utf8(buffer[..pos].to_vec())?,
+            None => String::from_utf8(buffer)?,
+        };
+
+        if buf_str.len() != size {
+            Err(anyhow::anyhow!("invalid utf8 string"))
+        } else {
+            Ok(buf_str)
         }
     }
 }
@@ -520,8 +526,15 @@ fn dump_wechat_info_v4(
         read_string_or_ptr(pid, phone_str_address - 0x20, nick_name_length as usize).unwrap();
 
     let account_name_length = read_number::<u64>(pid, phone_str_address - 0x30).unwrap();
-    let account_name =
+    let mut account_name =
         read_string_or_ptr(pid, phone_str_address - 0x40, account_name_length as _).unwrap();
+
+    // No account name
+    if account_name.is_empty() {
+        let wxid_length = read_number::<u64>(pid, phone_str_address - 0x50).unwrap();
+        let wxid = read_string_or_ptr(pid, phone_str_address - 0x60, wxid_length as _).unwrap();
+        account_name = wxid;
+    }
 
     let data_dir = if special_data_dir.is_some() {
         special_data_dir
@@ -1060,7 +1073,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.17")
+        .version("1.0.18")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
