@@ -7,7 +7,7 @@ use windows::{
     Win32::{
         Foundation::{CloseHandle, GetLastError, HANDLE, INVALID_HANDLE_VALUE, MAX_PATH},
         Storage::FileSystem::{
-            GetFileVersionInfoExW, GetFileVersionInfoSizeExW, FILE_VER_GET_LOCALISED
+            GetFileVersionInfoExW, GetFileVersionInfoSizeExW, FILE_VER_GET_LOCALISED,
         },
         System::{
             Diagnostics::{
@@ -18,7 +18,9 @@ use windows::{
                 },
             },
             Threading::{
-                OpenProcess, QueryFullProcessImageNameW, PEB, PROCESS_ACCESS_RIGHTS, PROCESS_BASIC_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_VM_READ, RTL_USER_PROCESS_PARAMETERS
+                OpenProcess, QueryFullProcessImageNameW, PEB, PROCESS_ACCESS_RIGHTS,
+                PROCESS_BASIC_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+                PROCESS_VM_READ, RTL_USER_PROCESS_PARAMETERS,
             },
         },
     },
@@ -55,27 +57,17 @@ impl Process {
         // Get pname/fullexepath
         let mut exe_len = MAX_PATH;
         let mut exe = [0u16; MAX_PATH as _];
-        QueryFullProcessImageNameW(
+        let _ = QueryFullProcessImageNameW(
             *self._inner_handle.borrow(),
             PROCESS_NAME_WIN32,
             PWSTR::from_raw(exe.as_mut_ptr()),
             &mut exe_len,
-        )
-        .with_context(|| {
-            format!(
-                "Failed to get process name with PID {}: {}",
-                self.pid,
-                GetLastError().0
-            )
-        })?;
-        let exe = String::from_utf16(&exe)
-            .with_context(|| "Failed to convert win32 path to string.")?;
+        );
+
+        let exe =
+            String::from_utf16(&exe).with_context(|| "Failed to convert win32 path to string.")?;
         let exe = exe.trim_matches('\x00').to_owned();
-        let name = exe
-            .split('\\')
-            .last()
-            .with_context(|| format!("Failed to get name from path: {}", exe))?
-            .to_owned();
+        let name = exe.split('\\').last().unwrap_or("").to_owned();
 
         // Get pid and ppid
         let mut pbi: PROCESS_BASIC_INFORMATION = std::mem::zeroed();
@@ -96,57 +88,59 @@ impl Process {
         let pid = pbi.UniqueProcessId as u32;
         let ppid = pbi.InheritedFromUniqueProcessId as u32;
 
-        // Get cmd
-        let cmd = if self._granted_access.borrow().contains(PROCESS_VM_READ) {
-            let mut peb: PEB = std::mem::zeroed();
-            ReadProcessMemory(
-                *self._inner_handle.borrow(),
-                pbi.PebBaseAddress as *const _,
-                &mut peb as *mut _ as *mut _,
-                std::mem::size_of::<PEB>(),
-                None,
-            )
-            .with_context(|| {
-                format!(
-                    "Failed to read process peb with PID {}: {}",
-                    self.pid,
-                    GetLastError().0
-                )
-            })?;
+        // Get cmd (Note: name of system process is empty, and can't read)
+        let cmd = if !name.is_empty() && self._granted_access.borrow().contains(PROCESS_VM_READ) {
+            let mut cmd = "".to_owned();
 
-            let mut proc_params: RTL_USER_PROCESS_PARAMETERS = std::mem::zeroed();
-            ReadProcessMemory(
-                *self._inner_handle.borrow(),
-                peb.ProcessParameters as *const _,
-                &mut proc_params as *mut _ as *mut _,
-                std::mem::size_of::<RTL_USER_PROCESS_PARAMETERS>(),
-                None,
-            )
-            .with_context(|| {
-                format!(
-                    "Failed to read process parameters with PID {}: {}",
-                    self.pid,
-                    GetLastError().0
+            loop {
+                let mut peb: PEB = std::mem::zeroed();
+                if ReadProcessMemory(
+                    *self._inner_handle.borrow(),
+                    pbi.PebBaseAddress as *const _,
+                    &mut peb as *mut _ as *mut _,
+                    std::mem::size_of::<PEB>(),
+                    None,
                 )
-            })?;
+                .is_err()
+                {
+                    break;
+                }
 
-            let mut buf = vec![0u16; (proc_params.CommandLine.Length / 2 + 1) as usize];
-            ReadProcessMemory(
-                *self._inner_handle.borrow(),
-                proc_params.CommandLine.Buffer.as_ptr() as *const _,
-                buf.as_mut_ptr() as *mut _,
-                proc_params.CommandLine.Length as _,
-                None,
-            )
-            .with_context(|| {
-                format!(
-                    "Failed to read process cmdline with PID {}: {}",
-                    self.pid,
-                    GetLastError().0
+                let mut proc_params: RTL_USER_PROCESS_PARAMETERS = std::mem::zeroed();
+                if ReadProcessMemory(
+                    *self._inner_handle.borrow(),
+                    peb.ProcessParameters as *const _,
+                    &mut proc_params as *mut _ as *mut _,
+                    std::mem::size_of::<RTL_USER_PROCESS_PARAMETERS>(),
+                    None,
                 )
-            })?;
-            String::from_utf16(buf.as_slice())
-                .with_context(|| "Failed to convert UNICODE_STRING cmdline to string.")?.trim_matches('\x00').to_owned()
+                .is_err()
+                {
+                    break;
+                }
+
+                let mut buf = vec![0u16; (proc_params.CommandLine.Length / 2 + 1) as usize];
+                if ReadProcessMemory(
+                    *self._inner_handle.borrow(),
+                    proc_params.CommandLine.Buffer.as_ptr() as *const _,
+                    buf.as_mut_ptr() as *mut _,
+                    proc_params.CommandLine.Length as _,
+                    None,
+                )
+                .is_err()
+                {
+                    break;
+                }
+
+                cmd = String::from_utf16(buf.as_slice())
+                    .with_context(|| "Failed to convert UNICODE_STRING cmdline to string.")?
+                    .trim_matches('\x00')
+                    .to_owned();
+
+                break;
+            }
+
+            cmd.to_owned()
         } else {
             "".to_owned()
         };
@@ -170,11 +164,8 @@ impl Process {
         let mut exe = pi.exe.encode_utf16().collect::<Vec<u16>>();
         exe.push(0x00);
 
-        let len = GetFileVersionInfoSizeExW(
-            FILE_VER_GET_LOCALISED,
-            PWSTR(exe.as_mut_ptr()),
-            &mut temp,
-        );
+        let len =
+            GetFileVersionInfoSizeExW(FILE_VER_GET_LOCALISED, PWSTR(exe.as_mut_ptr()), &mut temp);
         if len == 0 {
             return Err(anyhow!(format!(
                 "Failed to get file version info size with {}: {}",
@@ -359,24 +350,38 @@ impl Process {
     }
 
     unsafe fn check_open(&self) -> Result<()> {
-        let mut _inner_handle = self._inner_handle.borrow_mut();
-        if _inner_handle.is_invalid() {
-            let mut handle = OpenProcess(*self._granted_access.borrow(), false, self.pid)
-                .unwrap_or(INVALID_HANDLE_VALUE);
+        let accesses = [
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ,
+            PROCESS_QUERY_LIMITED_INFORMATION,
+        ];
 
-            if handle.is_invalid() {
-                let mut access = self._granted_access.borrow_mut();
-                *access = PROCESS_QUERY_LIMITED_INFORMATION;
-                handle = OpenProcess(*access, false, self.pid).with_context(|| {
-                    format!(
-                        "Failed to open process with PID {}: {}",
-                        self.pid,
-                        GetLastError().0
-                    )
-                })?;
+        let mut handle = INVALID_HANDLE_VALUE;
+
+        for access in accesses {
+            if let Ok(_handle) = OpenProcess(access, false, self.pid).with_context(|| {
+                format!(
+                    "Failed to open process with PID {}: {}",
+                    self.pid,
+                    GetLastError().0
+                )
+            }) {
+                let mut _granted_access = self._granted_access.borrow_mut();
+                *_granted_access = access;
+                handle = _handle;
+                break;
             }
-            *_inner_handle = handle;
         }
+
+        if handle.is_invalid() {
+            return Err(anyhow!(format!(
+                "Failed to open process with PID {}: {}",
+                self.pid,
+                GetLastError().0
+            )));
+        }
+
+        let mut _inner_handle = self._inner_handle.borrow_mut();
+        *_inner_handle = handle;
 
         Ok(())
     }
