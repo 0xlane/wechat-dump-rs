@@ -298,8 +298,11 @@ fn dump_wechat_info_v3(
         .next()
         .expect("unable to find phone type string");
     let phone_type_string_addr = phone_type_str_match.base + phone_type_str_match.offset;
-    let phone_type_string =
-        read_string(pid, phone_type_string_addr, 20).expect("read phone type string failed");
+    let phone_type_string_len_addr = phone_type_string_addr + 16;
+    let phone_type_string_len = read_number::<usize>(pid, phone_type_string_len_addr)
+        .expect("read phone type string len failed");
+    let phone_type_string = read_string(pid, phone_type_string_addr, phone_type_string_len)
+        .expect("read phone type string failed");
     let data_dir = if special_data_dir.is_some() {
         special_data_dir
             .unwrap()
@@ -340,20 +343,19 @@ fn dump_wechat_info_v3(
     let mut count = 0;
     while start >= phone_type_string_addr - align * 20 {
         // 名字长度>=16，就会变成指针，不直接存放字符串
-        let account_name_point_address =
-            read_number::<usize>(pid, start).expect("read account name point address failed");
-        let result = if pmis.iter().any(|x| {
-            account_name_point_address >= x.base
-                && account_name_point_address <= x.base + x.region_size
-        }) {
-            read_string(pid, account_name_point_address, 100)
-        } else {
-            read_string(pid, start, align)
+        let result = {
+            if let Ok(str_len) = read_number::<usize>(pid, start + 16) {
+                if str_len <= 0 || str_len > 20 {
+                    None
+                } else {
+                    read_string_or_ptr(pid, start, str_len).ok()
+                }
+            } else {
+                None
+            }
         };
 
-        if result.is_ok() {
-            let ac = result.unwrap();
-
+        if let Some(ac) = result {
             // 微信号是字母、数字、下划线组合，6-20位
             let re = Regex::new(r"^[a-zA-Z0-9_]+$").unwrap();
             if re.is_match(&ac) && ac.len() >= 6 && ac.len() <= 20 {
