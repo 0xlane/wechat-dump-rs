@@ -82,7 +82,7 @@ struct WechatInfo {
     pub nick_name: Option<String>,
     pub phone: Option<String>,
     pub data_dir: String,
-    pub key: String,
+    pub key: Option<String>,
 }
 
 impl std::fmt::Display for WechatInfo {
@@ -106,7 +106,7 @@ key: {}
                 self.nick_name.clone().unwrap_or("unknown".to_owned()),
                 self.phone.clone().unwrap_or("unknown".to_owned()),
                 self.data_dir,
-                self.key
+                self.key.clone().unwrap_or("unknown".to_owned())
             )
         } else {
             write!(
@@ -119,7 +119,11 @@ DataDir: {}
 key: {}
 =======================================
 "#,
-                self.pid, self.version, self.account_name, self.data_dir, self.key
+                self.pid,
+                self.version,
+                self.account_name,
+                self.data_dir,
+                self.key.clone().unwrap_or("unknown".to_owned())
             )
         }
     }
@@ -442,6 +446,7 @@ fn dump_wechat_info_v3(
                     let hash_mac_start_offset = end - reserve + IV_SIZE;
                     let hash_mac_end_offset = hash_mac_start_offset + hash_mac.len();
                     if hash_mac == &buf[hash_mac_start_offset..hash_mac_end_offset] {
+                        println!("[v] found key at 0x{:x}", key_addr);
                         key = Some(hex::encode(key_bytes));
                         break;
                     }
@@ -453,7 +458,7 @@ fn dump_wechat_info_v3(
     }
 
     if key.is_none() {
-        panic!("not found key");
+        eprintln!("[!] no found key!!");
     }
 
     WechatInfo {
@@ -463,7 +468,7 @@ fn dump_wechat_info_v3(
         nick_name: None,
         phone: None,
         data_dir,
-        key: key.unwrap(),
+        key: key,
     }
 }
 
@@ -736,14 +741,13 @@ rule GetKeyAddrStub
             return false;
         });
 
-    let mut key = key_addr.map(|v| {
+    let key = key_addr.map(|v| {
         let key_bytes = read_bytes(pid, v as _, KEY_SIZE).unwrap();
         hex::encode(key_bytes)
     });
 
     if key.is_none() {
         eprintln!("[!] no found key!!");
-        key = Some("unknown".to_owned());
     }
 
     WechatInfo {
@@ -753,7 +757,7 @@ rule GetKeyAddrStub
         nick_name: Some(nick_name),
         phone: Some(phone_str),
         data_dir,
-        key: key.clone().unwrap(),
+        key: key,
     }
 }
 
@@ -1012,6 +1016,13 @@ fn convert_to_sqlcipher_rawkey(pkey: &str, path: &PathBuf, is_v4: bool) -> Resul
 }
 
 fn dump_all_by_pid(wechat_info: &WechatInfo, output: &PathBuf) {
+    if wechat_info.key.is_none() {
+        eprintln!("[!] wechat key is none");
+        eprintln!("[!] stop dump!!");
+        return;
+    }
+    let key = wechat_info.key.clone().unwrap();
+
     let msg_dir = if wechat_info.version.starts_with("4.0") {
         wechat_info.data_dir.clone() + "db_storage"
     } else {
@@ -1061,9 +1072,9 @@ fn dump_all_by_pid(wechat_info: &WechatInfo, output: &PathBuf) {
         }
 
         if wechat_info.version.starts_with("4.0") {
-            std::fs::write(dest, decrypt_db_file_v4(&dbfile, &wechat_info.key).unwrap()).unwrap();
+            std::fs::write(dest, decrypt_db_file_v4(&dbfile, &key).unwrap()).unwrap();
         } else {
-            std::fs::write(dest, decrypt_db_file_v3(&dbfile, &wechat_info.key).unwrap()).unwrap();
+            std::fs::write(dest, decrypt_db_file_v3(&dbfile, &key).unwrap()).unwrap();
         }
     });
     pb.finish_with_message("decryption complete!!");
