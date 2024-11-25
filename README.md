@@ -1,6 +1,5 @@
 # wechat-dump-rs （支持微信4.0版本）
 
-
 该工具用于导出正在运行中的微信进程的 key 并自动解密所有微信数据库文件以及导出 key 后数据库文件离线解密。
 
 ![demo](images/demo.gif)
@@ -97,3 +96,7 @@ wechat-dump-rs.exe -k xxxxxxxxxxxxxxxxx -f c:\users\xxxx\xxxx\contact.db -r -vv 
 
 - [微信3.9手动寻找偏移](docs/wechat_3_9_analysis.md)
 - [微信4.0寻找key过程](docs/wechat_4_0_analysis.md)
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=0xlane/wechat-dump-rs&type=Date)](https://star-history.com/#0xlane/wechat-dump-rs&Date)
