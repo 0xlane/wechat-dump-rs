@@ -45,7 +45,7 @@ key: f11fd83bxxxxxx4f3f4x4ddxxxxxe417696b4axx19e09489ad48c
 
 ### 使用 sqlcipher browser 浏览数据库
 
-工具目前对稍微大点的库文件解密后可能存在畸形问题，建议使用 [DB Browser for SQLCipher](https://sqlitebrowser.org/) 进行浏览。
+工具自动解密后的文件可能存在畸形问题，可以直接使用 [DB Browser for SQLCipher](https://sqlitebrowser.org/) 浏览原始数据库文件。
 
 打开 sqlcipher 数据库时，选择 “原始密钥”，微信 V3 选择 sqlcipher3，V4 选择 sqlcipher4，每个数据库文件对应的原始密钥都是不一样的，获取方式如下：
 
