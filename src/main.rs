@@ -689,7 +689,7 @@ rule GetKeyAddrStub
                 cur_key_offset
             ));
             if key_bytes.iter().filter(|&&x| x <= 127).count() < 20
-                && key_bytes.iter().filter(|&&x| x == 0).count() < 2
+                && key_bytes.iter().filter(|&&x| x == 0).count() < 5
             {
                 // 验证 key 是否有效
                 let start = SALT_SIZE;
@@ -1076,7 +1076,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.20")
+        .version("1.0.21")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
