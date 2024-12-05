@@ -494,56 +494,6 @@ fn dump_wechat_info_v4(
         .expect("Should have compiled rules");
     let results = rules.scan_process(pid, 0).expect("Should have scanned");
 
-    let phone_str_match = results
-        .iter()
-        .filter(|x| x.identifier == "GetPhoneNumberOffset")
-        .next()
-        .expect("unbale to find phone string")
-        .strings
-        .iter()
-        .filter(|x| {
-            x.matches.iter().any(|y| {
-                wechat_writeable_private_mem_infos
-                    .iter()
-                    .any(|z| y.base == z.base)
-            })
-        })
-        .next()
-        .expect("unbale to find phone string")
-        .matches
-        .iter()
-        .filter(|x| {
-            wechat_writeable_private_mem_infos
-                .iter()
-                .any(|y| x.base == y.base)
-        })
-        .next()
-        .expect("unable to find phone string");
-
-    // let key_memory_info = wechat_writeable_private_mem_infos
-    //     .iter()
-    //     .find(|v| v.base == phone_str_match.base)
-    //     .unwrap();
-    // let key_search_range = 0..key_memory_info.base + key_memory_info.region_size;
-
-    let nick_name_length = u64::from_le_bytes(phone_str_match.data[..8].try_into().unwrap());
-    let phone_str_address = phone_str_match.base + phone_str_match.offset + 0x10;
-    let phone_str = read_string(pid, phone_str_address, 11).unwrap();
-    println!("[+] found phone at 0x{:x} --> {}********", phone_str_address, &phone_str[..3]);
-    let nick_name =
-        read_string_or_ptr(pid, phone_str_address - 0x20, nick_name_length as usize).unwrap();
-
-    let account_name_length = read_number::<u64>(pid, phone_str_address - 0x30).unwrap();
-    let mut account_name =
-        read_string_or_ptr(pid, phone_str_address - 0x40, account_name_length as _).unwrap();
-
-    // No account name
-    if account_name.is_empty() {
-        let wxid_length = read_number::<u64>(pid, phone_str_address - 0x50).unwrap();
-        let wxid = read_string_or_ptr(pid, phone_str_address - 0x60, wxid_length as _).unwrap();
-        account_name = wxid;
-    }
-
     let data_dir = if special_data_dir.is_some() {
         special_data_dir
             .unwrap()
@@ -634,10 +584,6 @@ rule GetKeyAddrStub
     }
 
     let mut pre_addresses: HashSet<u64> = HashSet::new();
-    key_stub_str_addresses.sort_by(|&a, &b| {
-        a.abs_diff(phone_str_address as _)
-            .cmp(&b.abs_diff(phone_str_address as _))
-    });
     for cur_stub_addr in key_stub_str_addresses {
         // if cur_stub_addr < key_search_range.end as _ {
         if wechat_writeable_private_mem_infos.iter().any(|v| {
@@ -754,9 +700,9 @@ rule GetKeyAddrStub
     WechatInfo {
         pid,
         version,
-        account_name,
-        nick_name: Some(nick_name),
-        phone: Some(phone_str),
+        account_name: "Unknown".to_owned(),
+        nick_name: Some("Unknown".to_owned()),
+        phone: Some("Unknown".to_owned()),
         data_dir,
         key: key,
     }
@@ -1077,7 +1023,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.22")
+        .version("1.0.22-no-phone")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
