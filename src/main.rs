@@ -195,7 +195,7 @@ fn read_string(pid: u32, addr: usize, size: usize) -> Result<String> {
         };
 
         if buf_str.len() != size {
-            Err(anyhow::anyhow!("invalid utf8 string"))
+            Err(anyhow::anyhow!(format!("except {} characters, but found: {} --> {}", size, buf_str.len(), buf_str)))
         } else {
             Ok(buf_str)
         }
@@ -205,9 +205,9 @@ fn read_string(pid: u32, addr: usize, size: usize) -> Result<String> {
 fn read_string_or_ptr(pid: u32, addr: usize, size: usize) -> Result<String> {
     match read_string(pid, addr, size) {
         Ok(ss) => Ok(ss),
-        Err(_) => {
+        Err(e) => {
             let str_ptr = read_number::<usize>(pid, addr)?;
-            Ok(read_string(pid, str_ptr, size)?)
+            Ok(read_string(pid, str_ptr, size).map_err(|_| e)?)
         }
     }
 }
@@ -529,6 +529,7 @@ fn dump_wechat_info_v4(
     let nick_name_length = u64::from_le_bytes(phone_str_match.data[..8].try_into().unwrap());
     let phone_str_address = phone_str_match.base + phone_str_match.offset + 0x10;
     let phone_str = read_string(pid, phone_str_address, 11).unwrap();
+    println!("[+] found phone at 0x{:x} --> {}********", phone_str_address, &phone_str[..3]);
     let nick_name =
         read_string_or_ptr(pid, phone_str_address - 0x20, nick_name_length as usize).unwrap();
 
@@ -1076,7 +1077,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.21")
+        .version("1.0.22")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
