@@ -51,13 +51,13 @@ key: f11fd83bxxxxxx4f3f4x4ddxxxxxe417696b4axx19e09489ad48c
 微信 V3 数据库文件 rawkey：
 
 ```bash
-wechat-dump-rs.exe -k xxxxxxxxxxxxxxxxx -f c:\users\xxxx\xxxx\contact.db -r -vv 3
+wechat-dump-rs.exe -k xxxxxxxxxxxxxxxxx -f c:\users\xxxx\xxxx\contact.db -r --vv 3
 ```
 
 微信 V4 数据库文件 rawkey：
 
 ```bash
-wechat-dump-rs.exe -k xxxxxxxxxxxxxxxxx -f c:\users\xxxx\xxxx\contact.db -r -vv 4
+wechat-dump-rs.exe -k xxxxxxxxxxxxxxxxx -f c:\users\xxxx\xxxx\contact.db -r --vv 4
 ```
 
 ## 原理
