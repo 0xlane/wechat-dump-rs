@@ -48,7 +48,7 @@ const RULES_V3: &str = r#"
     rule GetDataDir_v3
     {
         strings:
-            $a = /[a-zA-Z]:\\(.{1,100}?\\){0,1}?WeChat Files\\[0-9a-zA-Z_-]{6,20}?\\/
+            $a = /([a-zA-Z]:\\|\\\\)([^\\:]{1,100}?\\){0,10}?WeChat Files\\[0-9a-zA-Z_-]{6,20}?\\/
         
         condition:
             $a
@@ -59,7 +59,7 @@ const RULES_V4: &str = r#"
     rule GetDataDir
     {
         strings:
-            $a = /[a-zA-Z]:\\(.{1,100}?\\){0,1}?xwechat_files\\[0-9a-zA-Z_-]{6,24}?\\db_storage\\/
+            $a = /([a-zA-Z]:\\|\\\\)([^\\:]{1,100}?\\){0,10}?xwechat_files\\[0-9a-zA-Z_-]{6,24}?\\db_storage\\/
         
         condition:
             $a
@@ -389,9 +389,10 @@ fn dump_wechat_info_v3(
     const AES_BLOCK_SIZE: usize = 16;
     const SALT_SIZE: usize = 16;
     const PAGE_SIZE: usize = 4096;
-    let db_file_path = data_dir.clone() + "Msg\\Misc.db";
+    let mut db_file_path = PathBuf::from(data_dir.clone());
+    db_file_path.push(r"Msg\Misc.db");
     let mut db_file = std::fs::File::open(&db_file_path)
-        .expect(format!("{} is not exsit", &db_file_path).as_str());
+        .expect(format!("{} is not exsit", db_file_path.display()).as_str());
     let mut buf = [0u8; PAGE_SIZE];
     db_file.read(&mut buf[..]).expect("read Misc.db is failed");
 
@@ -1079,7 +1080,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.23")
+        .version("1.0.24")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
