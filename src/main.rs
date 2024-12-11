@@ -691,8 +691,8 @@ rule GetKeyAddrStub
                 "find key bytes failed in memory: {:X}",
                 cur_key_offset
             ));
-            if key_bytes.iter().filter(|&&x| x <= 127).count() < 20
-                && key_bytes.iter().filter(|&&x| x == 0).count() < 5
+            if key_bytes.iter().filter(|&&x| x.is_ascii_alphanumeric()).count() < 20    // limit number of including ascii alphanumeric
+                && key_bytes.iter().filter(|&&x| x == 0).count() < 10  // limit number of including zero
             {
                 // 验证 key 是否有效
                 let start = SALT_SIZE;
