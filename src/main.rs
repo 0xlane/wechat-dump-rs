@@ -48,7 +48,7 @@ const RULES_V3: &str = r#"
     rule GetDataDir_v3
     {
         strings:
-            $a = /[a-zA-Z]:\\(.{1,100}?\\){0,1}?WeChat Files\\[0-9a-zA-Z_-]{6,20}?\\/
+            $a = /([a-zA-Z]:\\|\\\\)([^\\:]{1,100}?\\){0,10}?WeChat Files\\[0-9a-zA-Z_-]{6,20}?\\/
         
         condition:
             $a
@@ -59,16 +59,16 @@ const RULES_V4: &str = r#"
     rule GetDataDir
     {
         strings:
-            $a = /[a-zA-Z]:\\(.{1,100}?\\){0,1}?xwechat_files\\[0-9a-zA-Z_-]{6,24}?\\db_storage\\/
+            $a = /([a-zA-Z]:\\|\\\\)([^\\:]{1,100}?\\){0,10}?xwechat_files\\[0-9a-zA-Z_-]{6,24}?\\db_storage\\/
         
         condition:
             $a
     }
 
-    rule GetPhoneNumberOffset
+    rule GetUserInfoOffset
     {
         strings:
-            $a = /[\x01-\x20]\x00{7}(\x0f|\x1f)\x00{7}[0-9]{11}\x00{5}\x0b\x00{7}\x0f\x00{7}/
+            $a = /(.{16}[\x00-\x20]\x00{7}(\x0f|\x1f)\x00{7}){2}.{16}[\x01-\x20]\x00{7}(\x0f|\x1f)\x00{7}[0-9]{11}\x00{5}\x0b\x00{7}\x0f\x00{7}.{25}\x00{7}\x2f\x00{7}/
         condition:
             $a
     }
@@ -389,9 +389,10 @@ fn dump_wechat_info_v3(
     const AES_BLOCK_SIZE: usize = 16;
     const SALT_SIZE: usize = 16;
     const PAGE_SIZE: usize = 4096;
-    let db_file_path = data_dir.clone() + "Msg\\Misc.db";
+    let mut db_file_path = PathBuf::from(data_dir.clone());
+    db_file_path.push(r"Msg\Misc.db");
     let mut db_file = std::fs::File::open(&db_file_path)
-        .expect(format!("{} is not exsit", &db_file_path).as_str());
+        .expect(format!("{} is not exsit", db_file_path.display()).as_str());
     let mut buf = [0u8; PAGE_SIZE];
     db_file.read(&mut buf[..]).expect("read Misc.db is failed");
 
@@ -607,9 +608,10 @@ rule GetKeyAddrStub
     const SALT_SIZE: usize = 16;
     const PAGE_SIZE: usize = 4096;
     const ROUND_COUNT: u32 = 256000;
-    let db_file_path = data_dir.clone() + r"db_storage\biz\biz.db";
+    let mut db_file_path = PathBuf::from(data_dir.clone());
+    db_file_path.push(r"db_storage\biz\biz.db");
     let mut db_file = std::fs::File::open(&db_file_path)
-        .expect(format!("{} is not exsit", &db_file_path).as_str());
+        .expect(format!("{} is not exsit", db_file_path.display()).as_str());
     let mut buf = [0u8; PAGE_SIZE];
     db_file.read(&mut buf[..]).expect("read biz.db is failed");
 
@@ -635,8 +637,8 @@ rule GetKeyAddrStub
                 "find key bytes failed in memory: {:X}",
                 cur_key_offset
             ));
-            if key_bytes.iter().filter(|&&x| x <= 127).count() < 20
-                && key_bytes.iter().filter(|&&x| x == 0).count() < 5
+            if key_bytes.iter().filter(|&&x| x.is_ascii_alphanumeric()).count() < 20    // limit number of including ascii alphanumeric
+                && key_bytes.iter().filter(|&&x| x == 0).count() < 10  // limit number of including zero
             {
                 // 验证 key 是否有效
                 let start = SALT_SIZE;
@@ -1023,7 +1025,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.22-no-phone")
+        .version("1.0.24-no-phone")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
