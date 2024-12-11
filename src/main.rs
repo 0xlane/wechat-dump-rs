@@ -65,10 +65,10 @@ const RULES_V4: &str = r#"
             $a
     }
 
-    rule GetPhoneNumberOffset
+    rule GetUserInfoOffset
     {
         strings:
-            $a = /[\x01-\x20]\x00{7}(\x0f|\x1f)\x00{7}[0-9]{11}\x00{5}\x0b\x00{7}\x0f\x00{7}/
+            $a = /(.{16}[\x00-\x20]\x00{7}(\x0f|\x1f)\x00{7}){2}.{16}[\x01-\x20]\x00{7}(\x0f|\x1f)\x00{7}[0-9]{11}\x00{5}\x0b\x00{7}\x0f\x00{7}.{25}\x00{7}\x2f\x00{7}/
         condition:
             $a
     }
@@ -494,11 +494,11 @@ fn dump_wechat_info_v4(
         .expect("Should have compiled rules");
     let results = rules.scan_process(pid, 0).expect("Should have scanned");
 
-    let phone_str_match = results
+    let user_info_match = results
         .iter()
-        .filter(|x| x.identifier == "GetPhoneNumberOffset")
+        .filter(|x| x.identifier == "GetUserInfoOffset")
         .next()
-        .expect("unbale to find phone string")
+        .expect("unbale to find user info")
         .strings
         .iter()
         .filter(|x| {
@@ -509,7 +509,7 @@ fn dump_wechat_info_v4(
             })
         })
         .next()
-        .expect("unbale to find phone string")
+        .expect("unbale to find user info")
         .matches
         .iter()
         .filter(|x| {
@@ -518,29 +518,30 @@ fn dump_wechat_info_v4(
                 .any(|y| x.base == y.base)
         })
         .next()
-        .expect("unable to find phone string");
+        .expect("unable to find user info");
 
     // let key_memory_info = wechat_writeable_private_mem_infos
     //     .iter()
-    //     .find(|v| v.base == phone_str_match.base)
+    //     .find(|v| v.base == user_info_match.base)
     //     .unwrap();
     // let key_search_range = 0..key_memory_info.base + key_memory_info.region_size;
 
-    let nick_name_length = u64::from_le_bytes(phone_str_match.data[..8].try_into().unwrap());
-    let phone_str_address = phone_str_match.base + phone_str_match.offset + 0x10;
-    let phone_str = read_string(pid, phone_str_address, 11).unwrap();
-    println!("[+] found phone at 0x{:x} --> {}********", phone_str_address, &phone_str[..3]);
-    let nick_name =
-        read_string_or_ptr(pid, phone_str_address - 0x20, nick_name_length as usize).unwrap();
-
-    let account_name_length = read_number::<u64>(pid, phone_str_address - 0x30).unwrap();
+    let user_info_address = user_info_match.base + user_info_match.offset;
+    let wxid_length = u64::from_le_bytes(user_info_match.data[0x10..0x10+0x8].try_into().unwrap());
+    let wxid = 
+        read_string_or_ptr(pid, user_info_address, wxid_length as usize).unwrap();
+    let account_name_length = u64::from_le_bytes(user_info_match.data[0x30..0x30+0x8].try_into().unwrap());
     let mut account_name =
-        read_string_or_ptr(pid, phone_str_address - 0x40, account_name_length as _).unwrap();
+        read_string_or_ptr(pid, user_info_address + 0x20, account_name_length as usize).unwrap();
+    let nick_name_length = u64::from_le_bytes(user_info_match.data[0x50..0x50+0x8].try_into().unwrap());
+    let nick_name =
+        read_string_or_ptr(pid, user_info_address + 0x40, nick_name_length as usize).unwrap();
+    let phone_length = u64::from_le_bytes(user_info_match.data[0x70..0x70+0x8].try_into().unwrap());
+    let phone_str = read_string_or_ptr(pid, user_info_address + 0x60, phone_length as usize).unwrap();
+    println!("[+] found user info at 0x{:x} --> {}********", user_info_address, &phone_str[..3]);
 
-    // No account name
+    // non account name
     if account_name.is_empty() {
-        let wxid_length = read_number::<u64>(pid, phone_str_address - 0x50).unwrap();
-        let wxid = read_string_or_ptr(pid, phone_str_address - 0x60, wxid_length as _).unwrap();
         account_name = wxid;
     }
 
@@ -635,8 +636,8 @@ rule GetKeyAddrStub
 
     let mut pre_addresses: HashSet<u64> = HashSet::new();
     key_stub_str_addresses.sort_by(|&a, &b| {
-        a.abs_diff(phone_str_address as _)
-            .cmp(&b.abs_diff(phone_str_address as _))
+        a.abs_diff(user_info_address as _)
+            .cmp(&b.abs_diff(user_info_address as _))
     });
     for cur_stub_addr in key_stub_str_addresses {
         // if cur_stub_addr < key_search_range.end as _ {
@@ -661,9 +662,10 @@ rule GetKeyAddrStub
     const SALT_SIZE: usize = 16;
     const PAGE_SIZE: usize = 4096;
     const ROUND_COUNT: u32 = 256000;
-    let db_file_path = data_dir.clone() + r"db_storage\biz\biz.db";
+    let mut db_file_path = PathBuf::from(data_dir.clone());
+    db_file_path.push(r"db_storage\biz\biz.db");
     let mut db_file = std::fs::File::open(&db_file_path)
-        .expect(format!("{} is not exsit", &db_file_path).as_str());
+        .expect(format!("{} is not exsit", db_file_path.display()).as_str());
     let mut buf = [0u8; PAGE_SIZE];
     db_file.read(&mut buf[..]).expect("read biz.db is failed");
 
