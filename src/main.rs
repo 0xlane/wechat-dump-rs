@@ -544,6 +544,8 @@ fn dump_wechat_info_v4(
     // non account name
     if account_name.is_empty() {
         account_name = wxid;
+    } else if !wxid.is_empty() {
+        account_name = format!("{}/{}", account_name, wxid)
     }
 
     let data_dir = if special_data_dir.is_some() {
