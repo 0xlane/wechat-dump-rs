@@ -68,7 +68,7 @@ const RULES_V4: &str = r#"
     rule GetUserInfoOffset
     {
         strings:
-            $a = /(.{16}[\x00-\x20]\x00{7}(\x0f|\x1f)\x00{7}){2}.{16}[\x01-\x20]\x00{7}(\x0f|\x1f)\x00{7}[0-9]{11}\x00{5}\x0b\x00{7}\x0f\x00{7}.{25}\x00{7}\x2f\x00{7}/
+            $a = /(.{16}[\x00-\x20]\x00{7}(\x0f|\x1f)\x00{7}){2}.{16}[\x01-\x20]\x00{7}(\x0f|\x1f)\x00{7}[0-9]{11}\x00{5}\x0b\x00{7}\x0f\x00{7}.{25}\x00{7}(\x2f|\x1f|\x0f)\x00{7}/
         condition:
             $a
     }
@@ -1025,7 +1025,7 @@ fn cli() -> clap::Command {
     use clap::{arg, value_parser, Command};
 
     Command::new("wechat-dump-rs")
-        .version("1.0.24-no-phone")
+        .version("1.0.25-no-phone")
         .about("A wechat db dump tool")
         .author("REinject")
         .help_template("{name} ({version}) - {author}\n{about}\n{all-args}")
