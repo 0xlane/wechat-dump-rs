@@ -868,11 +868,7 @@ fn decrypt_db_file_v3(path: &PathBuf, pkey: &String) -> Result<Vec<u8>> {
         for cur_page in 0..total_page {
             let offset = if cur_page == 0 { SALT_SIZE } else { 0 };
             let start: usize = cur_page * PAGE_SIZE;
-            let end: usize = if (cur_page + 1) == total_page {
-                start + buf.len() % PAGE_SIZE
-            } else {
-                start + PAGE_SIZE
-            };
+            let end: usize = start + PAGE_SIZE;
 
             // 搞不懂，这一堆0是干啥的，文件大小直接翻倍了
             if buf[start..end].iter().all(|&x| x == 0) {
