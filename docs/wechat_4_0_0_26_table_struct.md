@@ -211,9 +211,35 @@ CREATE TABLE ilink_voip(wx_chatroom_ TEXT PRIMARY KEY, millsecond_ INTEGER, grou
 
 ## message
 
-消息记录相关
+存储聊天记录相关。聊天消息内容存储在 `message_[0-9].db` 数据库的 `Msg_md5(username)` 表的 `message_content` 字段，`username` 在 `contact` 表根据 `nickname` 查询。
+
+`local_type` 和 `message_content` 对照关系：
+
+|`local_type`|消息类型|`message_content`格式|
+|---|----|-----|
+|1|文本消息|plain|
+|3|图片消息|zstd_compress(xml)|
+|34|语音消息|zstd_compress|
+|42|名片消息|zstd_compress|
+|43|视频消息|zstd_compress|
+|47|动画表情|zstd_compress(xml)|
+|48|位置消息|zstd_compress|
+|244813135921|引用消息|zstd_compress(xml)|
+|17179869233|卡片式链接（带描述）|zstd_compress(xml)|
+|21474836529|卡片式链接/图文消息|zstd_compress(xml)|
+|154618822705|小程序分享|zstd_compress(xml)|
+|12884901937|音乐卡片|zstd_compress|
+|8594229559345|红包卡片|zstd_compress|
+|81604378673|聊天记录合并转发消息|zstd_compress|
+|266287972401|拍一拍消息|zstd_compress|
+|8589934592049|转账卡片|zstd_compress|
+|270582939697|视频号直播卡片|zstd_compress|
+|25769803825|文件消息|zstd_compress|
+|10000|系统消息（撤回、加入群聊、群管理、群语音通话等）|plain or zstd_compress(xml)|
 
 ### biz_message_0.db
+
+公众号消息记录
 
 ```sql
 CREATE TABLE DeleteInfo(chat_name_id INTEGER, delete_table_name TEXT, CONSTRAINT UNIQUE_CHAT_DELETE UNIQUE(chat_name_id, delete_table_name))
@@ -246,31 +272,7 @@ CREATE UNIQUE INDEX VoiceInfo_UNIQUE_INDEX ON VoiceInfo(chat_name_id, create_tim
 
 ### message_0.db
 
-该数据库存储聊天记录相关。聊天消息内容存储在 `message_[0-9].db` 数据库的 `Msg_md5(username)` 表的 `message_content` 字段，`username` 在 `contact` 表根据 `nickname` 查询。
-
-`local_type` 和 `message_content` 对照关系：
-
-|`local_type`|消息类型|`message_content`格式|
-|---|----|-----|
-|1|文本消息|plain|
-|3|图片消息|zstd_compress(xml)|
-|34|语音消息|zstd_compress|
-|42|名片消息|zstd_compress|
-|43|视频消息|zstd_compress|
-|47|动画表情|zstd_compress(xml)|
-|48|位置消息|zstd_compress|
-|244813135921|引用消息|zstd_compress(xml)|
-|17179869233|卡片式链接（带描述）|zstd_compress(xml)|
-|21474836529|卡片式链接|zstd_compress(xml)|
-|154618822705|小程序分享|zstd_compress(xml)|
-|12884901937|音乐卡片|zstd_compress|
-|8594229559345|红包卡片|zstd_compress|
-|81604378673|聊天记录合并转发消息|zstd_compress|
-|266287972401|拍一拍消息|zstd_compress|
-|8589934592049|转账卡片|zstd_compress|
-|270582939697|视频号直播卡片|zstd_compress|
-|25769803825|文件消息|zstd_compress|
-|10000|系统消息（撤回、加入群聊、群管理、群语音通话等）|plain or zstd_compress(xml)|
+聊天记录
 
 ```sql
 CREATE TABLE DeleteInfo(chat_name_id INTEGER, delete_table_name TEXT, CONSTRAINT UNIQUE_CHAT_DELETE UNIQUE(chat_name_id, delete_table_name))
