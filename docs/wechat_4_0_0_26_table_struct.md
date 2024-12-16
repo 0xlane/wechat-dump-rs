@@ -4,7 +4,11 @@
 
 ## login
 
+用户登录相关
+
 ### key_info.db
+
+用户认证信息相关
 
 ```sql
 CREATE TABLE LoginKeyInfoTable(user_name_md5 TEXT, key_md5 TEXT, key_info_md5 TEXT, key_info_data BLOB)
@@ -12,6 +16,8 @@ CREATE UNIQUE INDEX LoginKeyInfoTable_USER_KEYINFO ON LoginKeyInfoTable(user_nam
 ```
 
 ## biz
+
+公众号相关
 
 ### biz.db
 
@@ -21,7 +27,11 @@ CREATE TABLE biz_pay_status(url_id TEXT, is_charge_appmsg INTEGER, is_paid INTEG
 
 ## contact
 
+联系人相关
+
 ### contact.db
+
+联系人数据库，包括在微信里你能看到的各种群、群成员、通讯录、公众号的信息。
 
 ```sql
 CREATE TABLE biz_info(id INTEGER PRIMARY KEY, username TEXT, type INTEGER, accept_type INTEGER, child_type INTEGER, version INTEGER, external_info TEXT, brand_info TEXT, brand_icon_url TEXT, brand_list TEXT, brand_flag INTEGER, belong TEXT, ext_buffer BLOB)
@@ -94,6 +104,8 @@ CREATE INDEX wacontact_APPID ON wacontact(app_id)
 
 ## emoticon
 
+表情包相关
+
 ### emoticon.db
 
 ```sql
@@ -114,6 +126,8 @@ CREATE UNIQUE INDEX kStoreEmoticonPackageTable_PID ON kStoreEmoticonPackageTable
 ```
 
 ## favorite
+
+收藏
 
 ### favorite.db
 
@@ -179,6 +193,8 @@ CREATE INDEX video_hardlink_info_v3_MODIFY_TIME ON video_hardlink_info_v3(modify
 
 ## head_image
 
+用户头像相关
+
 ### head_image.db
 
 ```sql
@@ -194,6 +210,8 @@ CREATE TABLE ilink_voip(wx_chatroom_ TEXT PRIMARY KEY, millsecond_ INTEGER, grou
 ```
 
 ## message
+
+消息记录相关
 
 ### biz_message_0.db
 
@@ -216,6 +234,8 @@ CREATE INDEX Msg_02628fb4b062917ee2a9d4d7bde609ad_TYPE_SEQ ON Msg_02628fb4b06291
 
 ### media_0.db
 
+语音消息内容
+
 ```sql
 CREATE TABLE Name2Id(user_name TEXT PRIMARY KEY)
 CREATE TABLE TimeStamp(timestamp INTEGER)
@@ -225,6 +245,32 @@ CREATE UNIQUE INDEX VoiceInfo_UNIQUE_INDEX ON VoiceInfo(chat_name_id, create_tim
 ```
 
 ### message_0.db
+
+该数据库存储聊天记录相关。聊天消息内容存储在 `message_[0-9].db` 数据库的 `Msg_md5(username)` 表的 `message_content` 字段，`username` 在 `contact` 表根据 `nickname` 查询。
+
+`local_type` 和 `message_content` 对照关系：
+
+|`local_type`|消息类型|`message_content`格式|
+|---|----|-----|
+|1|文本消息|plain|
+|3|图片消息|zstd_compress(xml)|
+|34|语音消息|zstd_compress|
+|42|名片消息|zstd_compress|
+|43|视频消息|zstd_compress|
+|47|动画表情|zstd_compress(xml)|
+|48|位置消息|zstd_compress|
+|244813135921|引用消息|zstd_compress(xml)|
+|17179869233|卡片式链接（带描述）|zstd_compress(xml)|
+|21474836529|卡片式链接|zstd_compress(xml)|
+|154618822705|小程序分享|zstd_compress(xml)|
+|12884901937|音乐卡片|zstd_compress|
+|8594229559345|红包卡片|zstd_compress|
+|81604378673|聊天记录合并转发消息|zstd_compress|
+|266287972401|拍一拍消息|zstd_compress|
+|8589934592049|转账卡片|zstd_compress|
+|270582939697|视频号直播卡片|zstd_compress|
+|25769803825|文件消息|zstd_compress|
+|10000|系统消息（撤回、加入群聊、群管理等）|plain or zstd_compress(xml)|
 
 ```sql
 CREATE TABLE DeleteInfo(chat_name_id INTEGER, delete_table_name TEXT, CONSTRAINT UNIQUE_CHAT_DELETE UNIQUE(chat_name_id, delete_table_name))
@@ -265,6 +311,8 @@ CREATE TABLE table_info(Key TEXT PRIMARY KEY, ValueInt64 INTEGER, ValueDouble RE
 
 ### message_revoke.db
 
+该数据库只存储本人撤回的消息，不存其他人撤回的消息
+
 ```sql
 CREATE TABLE revokemessage(to_user_name TEXT, svr_id INTEGER, message_type INTEGER, revoke_time INTEGER, content TEXT, at_user_list TEXT)
 CREATE INDEX revokemessage_revoke_time ON revokemessage(revoke_time)
@@ -281,6 +329,8 @@ CREATE TABLE new_tips(unique_id TEXT PRIMARY KEY, disable INTEGER, new_tips_cont
 
 ## session
 
+窗口会话
+
 ### session.db
 
 ```sql
@@ -291,6 +341,8 @@ CREATE INDEX SessionTable_TYPE ON SessionTable(type)
 ```
 
 ## sns
+
+朋友圈相关
 
 ### sns.db
 
