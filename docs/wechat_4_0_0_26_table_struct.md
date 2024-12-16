@@ -270,7 +270,7 @@ CREATE UNIQUE INDEX VoiceInfo_UNIQUE_INDEX ON VoiceInfo(chat_name_id, create_tim
 |8589934592049|转账卡片|zstd_compress|
 |270582939697|视频号直播卡片|zstd_compress|
 |25769803825|文件消息|zstd_compress|
-|10000|系统消息（撤回、加入群聊、群管理等）|plain or zstd_compress(xml)|
+|10000|系统消息（撤回、加入群聊、群管理、群语音通话等）|plain or zstd_compress(xml)|
 
 ```sql
 CREATE TABLE DeleteInfo(chat_name_id INTEGER, delete_table_name TEXT, CONSTRAINT UNIQUE_CHAT_DELETE UNIQUE(chat_name_id, delete_table_name))
