@@ -90,10 +90,13 @@ wechat-dump-rs.exe -k xxxxxxxxxxxxxxxxx -f c:\users\xxxx\xxxx\contact.db -r --vv
 - 4.0.0.35
 - 4.0.1.11
 - 4.0.1.13
+- 4.0.1.17
 
 ## 库表结构
 
 - [4.0.0.26](docs/wechat_4_0_0_26_table_struct.md)
+
+> 4.0 聊天记录内容解析参考示例 [导出聊天记录到TXT](./sample_scripts/导出聊天记录到TXT/)。
 
 ## 微信分析记录
 
