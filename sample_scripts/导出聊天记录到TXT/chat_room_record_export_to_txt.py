@@ -154,6 +154,8 @@ class WeixinDbStorage:
 
         result = [list(item) for item in result]
 
+        username_r_q = {}
+
         for item in result:
             if isinstance(item[-1], str):
                 item[-1] = item[-1].encode()
@@ -226,8 +228,10 @@ class WeixinDbStorage:
                         item[-1] = item[-1] + b" "  + root.find('appmsg').find('url').text.encode()
             if item[-1] != None:
                 # 用户名脱敏
-                r = chr(ord('m') + random.randint(0, 9)).encode()
-                q = chr(ord('d') + random.randint(0, 9)).encode()
+                username = item[-1].split()[0]
+                if username_r_q.get(username) is None:
+                    username_r_q[username] = (chr(ord('m') + random.randint(0, 9)).encode(), chr(ord('d') + random.randint(0, 9)).encode())
+                r, q = username_r_q[username]
                 r_l = len(item[-1].split()[0][0:-4])
                 q_l = len(item[-1].split()[0][0:-3])
                 item[-1] = item[-1][0:r_l] + r + item[-1][r_l + 1:]
