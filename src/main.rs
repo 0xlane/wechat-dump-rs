@@ -1143,6 +1143,9 @@ fn main() {
                 get_pid_by_name_and_cmd_pattern("Weixin.exe", r#"Weixin\.exe"?\s*$"#),
             ]
             .concat();
+            if pids.is_empty() {
+                panic!("WeChat is not running!!")
+            }
             for pid in pids {
                 let wechat_info = dump_wechat_info(pid, None);
 
