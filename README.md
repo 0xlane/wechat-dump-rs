@@ -69,7 +69,7 @@ wechat-dump-rs.exe -k xxxxxxxxxxxxxxxxx -f c:\users\xxxx\xxxx\contact.db -r --vv
 1. ~~微信登录设备类型基本只有 iphone、android，在内存中先搜到设备类型所在内存，key 就在它的前面，向前搜就行~~
 2. ~~key 的内存地址和登录设备类型据我观察是 16 字节对齐的，所以每次向前 16 字节~~
 
-> **微信 4.0 的 key 借助了用户绑定的国内手机号定位，未绑定手机号的参考 #41，绑定国外手机号的参考 #29。**
+> **微信 4.0 的 key 借助了用户绑定的国内手机号定位，未绑定手机号的参考 [#41](https://github.com/0xlane/wechat-dump-rs/issues/41)，绑定国外手机号的参考 [#29](https://github.com/0xlane/wechat-dump-rs/issues/29)。**
 
 还有其它一些小细节，直接看一下代码吧。
 
